@@ -1,3 +1,0 @@
-#!/bin/bash
-REAL_PATH=$(dirname "$(readlink -f "$0")")
-"$REAL_PATH/.venv/bin/python3" "$REAL_PATH/xssentry.py" "$@"
