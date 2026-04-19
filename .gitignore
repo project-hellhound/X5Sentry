@@ -153,6 +153,9 @@ cython_debug/
 # Hellhound/XSSentry specific
 evidence/
 .tmp_spider.json
+.spider_*.json
 *.tmp
 logs/
 bin/
+xssentry
+xssentry.egg-info/

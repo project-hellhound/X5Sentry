@@ -18,6 +18,7 @@ fi
 
 # Create virtual environment
 echo -e "${BLUE}[*] Creating virtual environment (.venv)...${NC}"
+rm -rf .venv
 python3 -m venv .venv
 if [ $? -ne 0 ]; then
     echo -e "${RED}[!] Failed to create virtual environment. Ensure 'python3-venv' is installed.${NC}"
@@ -30,7 +31,7 @@ VENV_PYTHON="./.venv/bin/python3"
 
 echo -e "${BLUE}[*] Installing dependencies in venv...${NC}"
 $VENV_PIP install --upgrade pip
-$VENV_PIP install playwright aiohttp beautifulsoup4 lxml
+$VENV_PIP install playwright aiohttp beautifulsoup4 lxml rich
 
 # Install playwright browsers in venv
 echo -e "${BLUE}[*] Installing Playwright browsers...${NC}"

