@@ -43,7 +43,7 @@ except ImportError:
 
 VERSION      = "12.0"
 __author__   = "Sree Danush S (L4ZZ3RJ0D)"
-__license__  = "MIT"
+__license__  = "GPLv3"
 __credits__  = ["L4ZZ3RJ0D"]
 __maintainer__ = "L4ZZ3RJ0D"
 
