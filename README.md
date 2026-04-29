@@ -153,8 +153,11 @@ For authorized security testing only. This software is licensed under the **GNU 
 
 ---
 
-## Author
+## Authors
 
-**L4ZZ3RJ0D** (Hellhound Security Team)
-
-> Part of the [Hellhound Pentest Framework](https://github.com/project-hellhound).
+<a href="https://github.com/L33TxGH05T">
+  <img src="https://img.shields.io/badge/Lead-Developer-L33TxGH05T-1a1a1a?style=for-the-badge" alt="L33TxGH05T"/>
+</a>
+<a href="https://l4zz3rj0d.github.io">
+  <img src="https://img.shields.io/badge/Core-Developer-L4ZZ3RJ0D-c0392b?style=for-the-badge" alt="L4ZZ3RJ0D"/>
+</a>
