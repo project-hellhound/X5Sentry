@@ -1590,6 +1590,14 @@ class Config:
         self.max_retries        = kw.get("max_retries",        3)
         self.retry_base_delay   = kw.get("retry_base_delay",   0.5)
         self.max_urls_per_depth = kw.get("max_urls_per_depth", 500)
+        # Global wall-clock cap for the *entire* run (recon + probes + crawl).
+        # Per-request timeout/retries are already bounded, but a large
+        # wordlist/probe-list against a genuinely unresponsive target can
+        # still stack up to hours of wall time. 0 disables the cap.
+        self.max_runtime        = kw.get("max_runtime",        3600)
+        # Skip the pre-flight "is the target even alive" check that aborts
+        # early instead of burning the whole run against a dead host.
+        self.no_liveness_check  = kw.get("no_liveness_check",  False)
         self.jitter_min         = kw.get("jitter_min",         0.05)
         self.jitter_max         = kw.get("jitter_max",         0.35)
         self.verbose            = kw.get("verbose",            False)
@@ -1617,6 +1625,9 @@ class Config:
         self.enable_cors        = kw.get("enable_cors",        True)
         self.output_format      = kw.get("output_format",      "json")
         self.output_file: Optional[str] = kw.get("output_file", None)
+        # JSON report is opt-in: only written to disk when the caller asks
+        # for it (--save-json), or explicitly names a .json --out path.
+        self.save_json          = kw.get("save_json",          False)
                                                                         
         self.follow_subdomains  = kw.get("follow_subdomains",  False)
         self.follow_redirects   = kw.get("follow_redirects",   False)
@@ -1639,6 +1650,8 @@ class Config:
             raise ValueError("max_depth must be 0–20")
         if not (1 <= self.concurrency <= 100):
             raise ValueError("concurrency must be 1–100")
+        if self.max_runtime is not None and self.max_runtime < 0:
+            raise ValueError("max_runtime must be >= 0 (0 disables the cap)")
 
                                                                         
                           
@@ -1938,74 +1951,6 @@ def _is_noise_path(path: str) -> bool:
     """Return True if *path* looks like VCS browser UI noise."""
     return bool(_NOISE_PATH_VCS_RE.search(path) or _NOISE_PATH_TABS_RE.search(path))
 
-# ── Third-party tracker / analytics host blocklist ──────────────────────────
-# SPA engines (Playwright) intercept *every* XHR/fetch the browser fires,
-# including analytics beacons, ad-tech pixels, and CDN telemetry calls.
-# These are never part of the target's attack surface and must be dropped
-# before they pollute the endpoint list, parameter map, and report.
-_THIRDPARTY_TRACKER_HOSTS = frozenset({
-    # Google Analytics / Tag Manager / Ads
-    "www.google-analytics.com", "google-analytics.com",
-    "analytics.google.com", "ssl.google-analytics.com",
-    "www.googletagmanager.com", "googletagmanager.com",
-    "www.googleadservices.com", "googleads.g.doubleclick.net",
-    "pagead2.googlesyndication.com", "adservice.google.com",
-    "www.google.com",
-    # Facebook / Meta
-    "www.facebook.com", "connect.facebook.net",
-    "pixel.facebook.com", "www.facebook.net",
-    # Microsoft / LinkedIn
-    "bat.bing.com", "snap.licdn.com", "px.ads.linkedin.com",
-    "www.linkedin.com",
-    # Twitter / X
-    "analytics.twitter.com", "t.co", "static.ads-twitter.com",
-    # HubSpot / Marketo / Salesforce
-    "js.hs-analytics.net", "track.hubspot.com",
-    "js.hsforms.net", "forms.hsforms.com",
-    "munchkin.marketo.net", "pi.pardot.com",
-    # Segment / Mixpanel / Amplitude / Heap
-    "cdn.segment.com", "api.segment.io",
-    "api.mixpanel.com", "cdn.mxpnl.com",
-    "api.amplitude.com", "cdn.amplitude.com",
-    "heapanalytics.com", "cdn.heapanalytics.com",
-    # Hotjar / FullStory / Clarity
-    "static.hotjar.com", "script.hotjar.com",
-    "vars.hotjar.com", "in.hotjar.com",
-    "rs.fullstory.com", "edge.fullstory.com",
-    "www.clarity.ms",
-    # Sentry / DataDog / New Relic
-    "browser.sentry-cdn.com", "o0.ingest.sentry.io",
-    "rum.browser-intake-datadoghq.com",
-    "js-agent.newrelic.com", "bam.nr-data.net",
-    # CDN telemetry
-    "rum.hlx.page", "cdn.cookielaw.org",
-    "consent.cookiebot.com",
-    # Intercom / Zendesk / Drift
-    "widget.intercom.io", "api-iam.intercom.io",
-    "static.zdassets.com", "ekr.zdassets.com",
-    "js.driftt.com",
-    # Generic ad / tracking
-    "stats.g.doubleclick.net", "cm.g.doubleclick.net",
-    "securepubads.g.doubleclick.net",
-})
-
-def _is_thirdparty_tracker(url: str) -> bool:
-    """Return True if *url* belongs to a known third-party tracker/analytics host."""
-    try:
-        host = urlparse(url).netloc.split(":")[0].lower()
-        if host in _THIRDPARTY_TRACKER_HOSTS:
-            return True
-        # Catch wildcard subdomains: *.sentry.io, *.hotjar.com, etc.
-        for tracker in ("sentry.io", "hotjar.com", "fullstory.com",
-                        "heapanalytics.com", "amplitude.com",
-                        "googlesyndication.com", "doubleclick.net",
-                        "googleadservices.com"):
-            if host.endswith("." + tracker):
-                return True
-        return False
-    except Exception:
-        return False
-
                                                                         
                                                                      
                                                                      
@@ -2039,6 +1984,29 @@ _PURE_PLACEHOLDER_RE = re.compile(
 )
 
 _SOCKETIO_RE = re.compile(r'/socket\.io/\??.*EIO=', re.I)
+
+def _resolve_app_path(base_url: str, raw_path: str, app_root: str = "") -> str:
+    """Resolve a root-relative path (e.g. "/api/posts") extracted from JS
+    against *base_url*, correcting for SPAs deployed under a sub-path.
+
+    Plain urljoin(base_url, "/api/posts") always resolves against the
+    domain root, per URL-join semantics — even when the crawl target and
+    every discovered page live under a mount prefix like "/pulse". Client
+    JS built for that kind of deployment (baseURL config, axios request
+    interceptors, import.meta.env.BASE_URL, etc.) commonly issues calls
+    like fetch('/api/posts') that only resolve correctly at runtime because
+    something prepends the app's own base path first. A naive urljoin here
+    silently strips that prefix and hands back an endpoint that 404s,
+    while the real, working endpoint (confirmed in traffic capture) lives
+    under the app root. When app_root is known and the raw path doesn't
+    already include it, prefer the app-root-qualified resolution.
+    """
+    full = urljoin(base_url, raw_path)
+    if app_root and raw_path.startswith("/"):
+        p = urlparse(full)
+        if p.path != app_root and not p.path.startswith(app_root + "/"):
+            full = urljoin(base_url, app_root + raw_path)
+    return full
 
 def normalize(url: str) -> str:
     try:
@@ -2303,28 +2271,9 @@ class Store:
 
     # React lazy-loading internals that appear as orphan params in virtually
     # every minified React/Next.js bundle — they are never real API params.
-    # Also includes Three.js / WebGL / DOM framework internals that leak
-    # from 3D rendering libraries and browser API wrappers.
     _REACT_INTERNAL_PARAMS = frozenset({
         '_result', '_status', '_payload', '_init', '_source', '_owner',
         '_store', '_self', '_debugSource', '_debugOwner', '_context',
-        # Three.js / WebGL / 3D rendering internals
-        'array', 'attributes', 'geometry', 'itemSize', 'offset',
-        'position', 'normal', 'uv', 'uv2', 'color', 'tangent',
-        'skinIndex', 'skinWeight', 'morphTarget', 'morphNormal',
-        'lineDistances', 'instanceMatrix', 'instanceColor',
-        'drawRange', 'groups', 'boundingBox', 'boundingSphere',
-        'vertices', 'faces', 'faceVertexUvs', 'normals', 'colors',
-        'indices', 'uniforms', 'varying', 'matrix', 'matrixWorld',
-        'quaternion', 'rotation', 'scale', 'castShadow', 'receiveShadow',
-        'frustumCulled', 'renderOrder', 'material', 'morphTargetInfluences',
-        # DOM / browser API internals
-        'innerHTML', 'outerHTML', 'textContent', 'nodeType',
-        'nodeName', 'nodeValue', 'childNodes', 'parentNode',
-        'className', 'classList', 'dataset', 'style',
-        'offsetWidth', 'offsetHeight', 'offsetLeft', 'offsetTop',
-        'scrollTop', 'scrollLeft', 'scrollWidth', 'scrollHeight',
-        'clientWidth', 'clientHeight',
     })
 
     def add_js_orphan_params(self, js_file_url: str, params: List[str]):
@@ -2999,12 +2948,6 @@ class Extractor:
         r'params\s*:\s*\{([^}]{1,400})\}',
         r'new\s+URLSearchParams\s*\(\s*\{([^}]{1,400})\}',
         r'FormData\s*\(\s*\)\s*;(?:[^}]{0,200}\.append\s*\(\s*["\']([^"\']+)["\'])',
-        # jQuery shorthand AJAX — $.post('/url', { key: val }), $.get, $.put etc.
-        r'\$\.(?:post|get|put|delete)\s*\([^,]{1,120},\s*\{([^}]{1,400})\}',
-        # jQuery $.ajax({ url: ..., data: {...} }) — the data:{} block is already
-        # caught by the generic pattern above, but this also catches the
-        # shorthand where data is a plain object arg: $.ajax('/url', {data:{...}})
-        r'\$\.ajax\s*\([^)]*data\s*:\s*\{([^}]{1,400})\}',
     ]
     _SECRET_RE = [
         (r'\b([13][a-km-zA-HJ-NP-Z1-9]{25,34})\b',                       "Bitcoin_Address"),
@@ -3105,8 +3048,6 @@ class Extractor:
         r'(?:fetch|axios)\s*\(\s*["\']([^"\'#\s]{5,})["\']',
         r'\.\s*(?:get|post|put|delete|patch)\s*\(\s*["\']([^"\'#\s]{5,})["\']',
         r'(?:fetch|axios|\.\s*(?:get|post|put|delete|patch))\s*\(\s*["\']([/][^"\'#\s]{3,})["\']',
-        # jQuery shorthand — $.post('/api/login', ...), $.get('/data', ...)
-        r'\$\.(?:post|get|put|delete|ajax)\s*\(\s*["\']([^"\'#\s]{3,})["\']',
         # Backtick template-literal path, e.g. `/screen/?key=${x}`,
         # `${id}/profile`, or `/api/user/${id}/profile` — any mix of
         # literal URL-safe segments and ${...} interpolations.
@@ -3118,7 +3059,7 @@ class Extractor:
     ]
     # Index of the template-literal pattern above — matches from here may
     # contain a ${...} runtime interpolation that needs flagging downstream.
-    _TEMPLATE_PATTERN_IDX = 4
+    _TEMPLATE_PATTERN_IDX = 3
 
     # Explicit method key in an options object: fetch-style `method:` or
     # jQuery $.ajax-style `type:`. Value restricted to real HTTP verbs to
@@ -3455,25 +3396,6 @@ class Extractor:
         "referenceHidden", "overflows", "placement", "enabled", "mode", "index",
         "length", "name", "type", "id", "value", "target", "action", "method",
         "enctype", "viewport", "charset", "description", "keywords", "author",
-        # Three.js / WebGL / 3D rendering library internals — these are object
-        # properties from Three.js geometry/material/buffer APIs, not API params.
-        "array", "attributes", "geometry", "itemSize", "offset",
-        "position", "normal", "uv", "uv2", "color", "tangent",
-        "skinIndex", "skinWeight", "morphTarget", "morphNormal",
-        "vertices", "faces", "normals", "colors", "indices",
-        "matrix", "matrixWorld", "quaternion", "rotation", "scale",
-        "uniforms", "varying", "material", "texture", "sampler",
-        "drawRange", "groups", "boundingBox", "boundingSphere",
-        "castShadow", "receiveShadow", "frustumCulled", "renderOrder",
-        "depthTest", "depthWrite", "blending", "side", "opacity",
-        "transparent", "wireframe", "visible", "fog",
-        "instanceMatrix", "instanceColor", "morphTargetInfluences",
-        # DOM / Canvas / WebGL context properties
-        "innerHTML", "outerHTML", "textContent", "nodeType",
-        "className", "classList", "dataset", "style",
-        "width", "height", "canvas", "context", "buffer",
-        "program", "shader", "framebuffer", "renderbuffer",
-        "title",
     })
 
     @classmethod
@@ -3963,7 +3885,7 @@ class Extractor:
         return found
 
     @classmethod
-    def js_endpoints(cls, text, base_url, store, emit):
+    def js_endpoints(cls, text, base_url, store, emit, app_root: str = ""):
                                                                            
         _seen_paths: set = set()
         for idx, pat in enumerate(cls._API_RE):
@@ -3989,7 +3911,7 @@ class Extractor:
                 clean_path = _parsed.path
                 if not clean_path or clean_path == "/":
                     continue
-                full = urljoin(base_url, clean_path)
+                full = _resolve_app_path(base_url, clean_path, app_root)
                                                                                           
                 _dedup_key = (full, frozenset(_qs_params))
                 if _dedup_key in _seen_paths:
@@ -5188,9 +5110,6 @@ class SPAScanner:
             async def on_request(req):
                 url = req.url; rtype = req.resource_type; method = req.method or "GET"
                 if rtype in ("fetch","xhr"):
-                    # Skip third-party tracker/analytics beacons
-                    if _is_thirdparty_tracker(url):
-                        return
                     hdrs = dict(req.headers or {})
                                                                                     
                                                                                         
@@ -5721,9 +5640,6 @@ class DeepSPACrawler:
                 method = req.method or "GET"
                 if rtype not in ("fetch", "xhr"):
                     return
-                # Skip third-party tracker/analytics beacons
-                if _is_thirdparty_tracker(url):
-                    return
                 dedup_key = (method, url.split("?")[0])
                 is_new = dedup_key not in _seen_xhr
                 _seen_xhr.add(dedup_key)
@@ -5780,9 +5696,6 @@ class DeepSPACrawler:
                     r_method = resp.request.method or "GET"
                     r_rtype = resp.request.resource_type
                     if r_rtype not in ("fetch", "xhr"):
-                        return
-                    # Skip third-party tracker/analytics responses
-                    if _is_thirdparty_tracker(r_url):
                         return
                     if resp.status not in range(200, 210):
                         return
@@ -7387,6 +7300,14 @@ class Spider:
         self.cookies = cookies; self.extra_headers = extra_headers
         self.base_domain = urlparse(target).netloc
         self._target_host = urlparse(target).hostname or ""
+        # App mount/base path (e.g. "/pulse" when the seed target is
+        # https://host/pulse/...). SPAs deployed under a sub-path routinely
+        # ship client JS that references API paths as if they were relative
+        # to that sub-path root (baseURL/interceptor patterns), but a plain
+        # urljoin(page_url, "/api/x") resolves against the domain root and
+        # silently drops the app's own mount prefix — see _resolve_js_path().
+        _seed_path = urlparse(target).path.rstrip("/")
+        self.app_root: str = _seed_path if _seed_path not in ("", "/") else ""
         self.is_ip_target = self._check_is_ip(self._target_host)
         self.store = Store()
         self.visited: Set[str] = set()
@@ -8032,7 +7953,7 @@ class Spider:
                     self._discover_url(full, depth+1, "HTML_Script", show_feed=True)
         for tag in soup.find_all("script"):
             if not tag.get("src") and tag.string:
-                Extractor.js_endpoints(tag.string, url, self.store, self.emit)
+                Extractor.js_endpoints(tag.string, url, self.store, self.emit, app_root=self.app_root)
                 Extractor.js_params(tag.string, url, self.store, self.emit)
                 Extractor.secrets(tag.string, url, self.store, self.emit)
                 Extractor.credential_objects(tag.string, url, self.store, self.emit)
@@ -8225,78 +8146,6 @@ class Spider:
                         existing_names.add(fd["name"])
 
             self._discover_url(full, depth+1, "Form_Action", show_feed=True)
-
-        # ── Orphan inputs: <input>/<select>/<textarea> NOT inside any <form> ──
-        # Some pages (e.g. VulnBanking) use bare inputs + JS click handlers
-        # ($.post, fetch) instead of standard <form> wrappers.  The form
-        # iterator above misses them entirely.  Collect any input elements
-        # that are NOT descendants of a <form> tag and register their names
-        # as form params on the current page URL.
-        _form_tags = set(soup.find_all("form"))
-        _orphan_inputs = []
-        _orphan_fields_detail = []
-        for el in soup.find_all(["input", "select", "textarea"]):
-            # Skip if this element is inside any <form>
-            if any(p in _form_tags for p in el.parents):
-                continue
-            el_type = el.get("type", "text").lower()
-            # Skip submit/button/reset/image — they aren't data fields
-            if el_type in ("submit", "button", "reset", "image"):
-                continue
-            nm = el.get("name", "").strip()
-            _source = "name"
-            if not nm:
-                _id = el.get("id", "").strip()
-                if _id:
-                    _stripped_id = re.sub(r'^(?:input|field|txt|frm|form)[-_]?', '', _id, flags=re.I).strip() or _id
-                    _HTML_TYPE_WORDS = {"text","password","email","number","tel","url",
-                                        "search","date","time","checkbox","radio","file",
-                                        "hidden","submit","button","reset","image"}
-                    if _stripped_id.lower() not in _HTML_TYPE_WORDS and len(_stripped_id) > 2:
-                        nm = _stripped_id
-                        _source = "id"
-            if not nm:
-                _ph = el.get("placeholder", "").strip()
-                if _ph:
-                    nm = re.sub(r'[^a-zA-Z0-9_]', '_', _ph.lower()).strip('_')
-                    nm = re.sub(r'_+', '_', nm)
-                    _source = "placeholder"
-            if not nm:
-                _al = el.get("aria-label", "").strip()
-                if _al:
-                    nm = re.sub(r'[^a-zA-Z0-9_]', '_', _al.lower()).strip('_')
-                    nm = re.sub(r'_+', '_', nm)
-                    _source = "aria-label"
-            if nm and nm not in _orphan_inputs:
-                _orphan_inputs.append(nm)
-                _orphan_fields_detail.append({
-                    "name":        nm,
-                    "name_source": _source,
-                    "type":        el_type,
-                    "hidden":      el_type == "hidden",
-                    "file":        el_type == "file",
-                    "required":    el.has_attr("required"),
-                    "value":       el.get("value", "") if el_type == "hidden" else "",
-                })
-        if _orphan_inputs:
-            self.emit.info("[Orphan-Inputs] %s <- [%s]" % (url, ", ".join(_orphan_inputs)))
-            # Register the page itself as an endpoint with the orphan params
-            self.store.add_endpoint(url, method="GET", source="Orphan_Form", score=Conf.HIGH)
-            _okey = self.store._key(url, "GET")
-            if _okey in self.store.endpoints:
-                _oep = self.store.endpoints[_okey]
-                _oep.setdefault("params", {}).setdefault("form", [])
-                for _p in _orphan_inputs:
-                    if _p and _p not in _oep["params"]["form"]:
-                        _oep["params"]["form"].append(_p)
-                # Also store field detail
-                existing_names = {f["name"] for f in _oep.get("form_fields_detail", [])}
-                if "form_fields_detail" not in _oep:
-                    _oep["form_fields_detail"] = []
-                for fd in _orphan_fields_detail:
-                    if fd["name"] not in existing_names:
-                        _oep["form_fields_detail"].append(fd)
-                        existing_names.add(fd["name"])
         for attr in ("data-src","data-href","data-url"):
             for tag in soup.find_all(attrs={attr: True}):
                 self._discover_url(urljoin(url, tag[attr]), depth+1, "DataAttr", show_feed=True)
@@ -8339,7 +8188,7 @@ class Spider:
             return
         Extractor.secrets(text, url, self.store, self.emit)
         Extractor.credential_objects(text, url, self.store, self.emit)
-        Extractor.js_endpoints(text, url, self.store, self.emit)
+        Extractor.js_endpoints(text, url, self.store, self.emit, app_root=self.app_root)
         Extractor.js_params(text, url, self.store, self.emit)
         Extractor.js_comments(text, url, self.store, self.emit)
         Extractor.js_routes(text, url, self.store, self.emit)
@@ -8648,6 +8497,7 @@ class Spider:
                 _t_recon = 0.0
                 _t_crawl = 0.0
                 _t_audit = 0.0
+                _hdr_s = None
                 try:
                     _hdr_s, _hdr_h, _ = await fetch(session, "GET", self.target, self.rl)
                     if _hdr_h:
@@ -8657,6 +8507,24 @@ class Spider:
                         }
                 except Exception:
                     pass
+
+                # ── Liveness gate ──────────────────────────────────────────
+                # fetch() already exhausted cfg.max_retries with backoff on
+                # the target root. If it *still* came back empty, the host is
+                # unresponsive/unreachable — bail out now instead of spending
+                # the next hour retrying every sensitive-file/admin/wordlist
+                # probe and crawl URL against a dead target. Partial (empty)
+                # results are still written normally by the caller.
+                if _hdr_s is None and not self.cfg.no_liveness_check:
+                    self.emit.warn(
+                        f"[Fatal] Target unreachable after "
+                        f"{self.cfg.max_retries + 1} attempt(s) "
+                        f"(timeout={self.cfg.timeout}s/attempt) — aborting scan early. "
+                        f"Use --no-liveness-check to force a full scan anyway "
+                        f"(e.g. if only the root path is blocked/WAF'd)."
+                    )
+                    return
+
                 self.emit.animator.start_anim("Recon Probing Base")
 
                 # ── Fire WhatWeb + TLS concurrently ───────────────────────────
@@ -8974,19 +8842,24 @@ def diff_crawls(old_json: str, new_json: str) -> dict:
                                                                         
 
 def _auto_save(store: Store, target: str, out_path: Optional[str],
-               fmt: str, emit: Emit) -> str:
+               fmt: str, emit: Emit, save_json: bool = False) -> str:
                                                               
     domain    = re.sub(r'[^a-zA-Z0-9_\-]', '_', urlparse(target).netloc)
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_path = out_path if (out_path and out_path.endswith(".json"))\
-                else f"spider_{domain}_{ts}.json"
 
-    try:
-        Path(json_path).write_text(store.export(target, fmt="json"))
-        pass                                                                
-    except Exception as e:
-        emit.warn(f"[Report] JSON save failed: {e}")
-        json_path = ""
+    # JSON is opt-in now: only auto-write it when the caller explicitly
+    # asked for it (--save-json), or explicitly pointed --out at a .json
+    # file (that's an explicit request too, just spelled differently).
+    explicit_json_out = bool(out_path and out_path.endswith(".json"))
+    json_path = ""
+    if save_json or explicit_json_out:
+        json_path = out_path if explicit_json_out else f"spider_{domain}_{ts}.json"
+        try:
+            Path(json_path).write_text(store.export(target, fmt="json"))
+            emit.always_info(f"[Report] JSON saved → {json_path}")
+        except Exception as e:
+            emit.warn(f"[Report] JSON save failed: {e}")
+            json_path = ""
 
                                                                   
     if out_path and fmt != "json":
@@ -9069,9 +8942,17 @@ def _do_run(target: str, cfg: Config, emit,
                 HARImporter(cfg.har_file, spider.store, emit, spider.is_valid, target).run()
             else:
                 emit.warn(f"[HAR] File not found: {cfg.har_file}")
-        asyncio.run(spider.run())
+        if cfg.max_runtime and cfg.max_runtime > 0:
+            asyncio.run(asyncio.wait_for(spider.run(), timeout=cfg.max_runtime))
+        else:
+            asyncio.run(spider.run())
     except KeyboardInterrupt:
         emit.warn("Scan interrupted — partial results follow")
+    except asyncio.TimeoutError:
+        emit.warn(
+            f"[Timeout] Scan exceeded --max-runtime={cfg.max_runtime}s — "
+            f"stopping and saving partial results (use --max-runtime 0 to disable this cap)"
+        )
     except ValueError as e:
         emit.warn(f"Config error: {e}")
         return {"raw": str(e), "intel": {}}
@@ -9090,7 +8971,7 @@ def _do_run(target: str, cfg: Config, emit,
 
                            
     json_path = _auto_save(spider.store, target, cfg.output_file,
-                           cfg.output_format, emit)
+                           cfg.output_format, emit, save_json=getattr(cfg, "save_json", False))
 
     intel  = json.loads(spider.store.export(target, fmt="json"))
     result = {"raw": "", "intel": intel}
@@ -9195,6 +9076,14 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Concurrent workers  (default: 12)")
     scan.add_argument("--timeout",     "-t", type=int, default=15, metavar="S",
                       help="Per-request timeout in seconds  (default: 15)")
+    scan.add_argument("--max-runtime", "-M", type=int, default=3600, metavar="S",
+                      help="Global wall-clock cap for the whole scan, in seconds. "
+                           "If exceeded, the scan stops and partial results are saved "
+                           "automatically — no Ctrl+C needed  (default: 3600; 0 = unlimited)")
+    scan.add_argument("--no-liveness-check", "-L", action="store_true",
+                      help="Skip the pre-flight check that aborts immediately if the "
+                           "target root is unreachable (use if only '/' is blocked/WAF'd "
+                           "but other paths are expected to respond)")
     scan.add_argument("--verbose",     "-v", action="store_true",
                       help="Show all discovery logs")
 
@@ -9215,10 +9104,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     out = p.add_argument_group(f"{C.CY}Output{C.RST}")
     out.add_argument("--out",    "-o", type=str, default=None, metavar="FILE",
-                     help="Extra output file  (JSON always auto-saved)")
+                     help="Extra output file  (only written when --save-json "
+                          "or --format is also given, or FILE ends in .json)")
     out.add_argument("--format", "-f", type=str, default="json",
                      choices=["json","jsonl","csv","burp","urls","nuclei"],
                      help="Extra output format  (default: json)")
+    out.add_argument("--save-json", "-j", action="store_true",
+                     help="Save the full JSON report to disk (opt-in — off by default; "
+                          "results still print to the terminal either way)")
 
     flags = p.add_argument_group(f"{C.CY}Feature Flags{C.RST}")
     flags.add_argument("--no-playwright", "-P", action="store_true",
@@ -9333,6 +9226,10 @@ def main():
     _pf("Depth",       str(args.depth))
     _pf("Concurrency", str(args.concurrency))
     _pf("Timeout",     f"{args.timeout}s")
+    _pf("Max Runtime", f"{args.max_runtime}s" if args.max_runtime > 0 else "unlimited")
+    _pf("Liveness Check",
+        "disabled" if args.no_liveness_check else "enabled",
+        C.GR if args.no_liveness_check else C.G)
     if not args.no_playwright and PLAYWRIGHT_AVAILABLE:
         if PATCHRIGHT_AVAILABLE:
             pw_status = "playwright  (+patchright available as bot-bypass fallback)"
@@ -9405,6 +9302,8 @@ def main():
         max_depth       = args.depth,
         concurrency     = args.concurrency,
         timeout         = args.timeout,
+        max_runtime     = args.max_runtime,
+        no_liveness_check = args.no_liveness_check,
         verbose         = args.verbose,
         use_playwright  = not args.no_playwright,
         enable_spa_interact = args.spa_interact,
@@ -9423,6 +9322,7 @@ def main():
         screenshot_priority = args.screenshot if args.screenshot else "standard",
         output_format   = args.format,
         output_file     = args.out,
+        save_json       = args.save_json,
         follow_subdomains = args.follow_subdomains,
         follow_redirects  = args.follow_redirects,
         enable_subdomain_enum = args.subdomains,
