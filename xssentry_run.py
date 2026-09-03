@@ -9,7 +9,7 @@ import os
 # Ensure this project root is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from xssentry.main import main
+from xssentry import main
 
 if __name__ == "__main__":
     main()

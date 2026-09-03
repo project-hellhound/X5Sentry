@@ -6,10 +6,10 @@ setup(
     description="Autonomous XSS Hunter [HELLHOUND-class]",
     author="Hellhound Security",
     packages=find_packages(),
-    py_modules=["spider"],
+    py_modules=["spider", "xssentry"],
     entry_points={
         "console_scripts": [
-            "xssentry=xssentry.main:main",
+            "xssentry=xssentry:main",
         ],
     },
     install_requires=[
